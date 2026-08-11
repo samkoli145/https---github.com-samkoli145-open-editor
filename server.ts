@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import { randomBytes } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import {
   bootNawat,
@@ -15,6 +16,18 @@ import {
 } from './src/index';
 
 const PORT = 3000;
+// أمنياً: يُربط محلياً فقط (127.0.0.1) افتراضياً؛ يمكن تجاوزه بـ NAWAT_HOST لأغراض تطويرية.
+const HOST = process.env.NAWAT_HOST || '127.0.0.1';
+// مفتاح API إلزامي لكل /api — يُولَّد عشوائياً عند غياب NAWAT_API_KEY ويُطبع عند الإقلاع.
+const API_KEY = process.env.NAWAT_API_KEY || randomBytes(24).toString('hex');
+// جذور الفحص المسموحة — افتراضياً مجلد العمل الحالي فقط (بلا قراءة أي مسار مطلق على الجهاز).
+const SCAN_ROOTS: string[] = (process.env.NAWAT_SCAN_ROOTS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+if (SCAN_ROOTS.length === 0) {
+  SCAN_ROOTS.push(process.cwd());
+}
 
 async function startServer() {
   const app = express();
@@ -41,6 +54,38 @@ async function startServer() {
     }
     next();
   });
+
+  // المصادقة الإلزامية: كل مسار /api يتطلب X-API-Key (يمنع الوصول الشبكي الخارجي حتى لو رُبط على 0.0.0.0)
+  app.use('/api', (req, res, next) => {
+    if (req.headers['x-api-key'] !== API_KEY) {
+      return res.status(401).json({ error: 'E401: missing or invalid X-API-Key' });
+    }
+    next();
+  });
+
+  // سجل تدقيق (قرص/ذاكرة) للأفعال الحساسة
+  const auditLog: Array<{ ts: number; action: string; detail: string }> = [];
+  const audit = (action: string, detail: string): void => {
+    const rec = { ts: Date.now(), action, detail };
+    auditLog.push(rec);
+    if (auditLog.length > 200) auditLog.shift();
+    console.log(`[AUDIT] ${action}: ${detail}`);
+  };
+
+  // التحقق من أن الجذر المطلوب فحصه يقع ضمن جذور الفحص المسموحة
+  const isAllowedScanRoot = (root: string): boolean => {
+    const r = root.endsWith('/') ? root : `${root}/`;
+    return SCAN_ROOTS.some((allowed) => {
+      let ar: string;
+      try {
+        ar = realpathSync(allowed);
+      } catch {
+        return false;
+      }
+      const base = ar.endsWith('/') ? ar : `${ar}/`;
+      return root === ar || root.startsWith(base);
+    });
+  };
 
 // Register Default System Commands
 context.commands.register({
