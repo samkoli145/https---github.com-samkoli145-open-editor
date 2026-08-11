@@ -9,6 +9,7 @@ import { ToolRegistry } from '../agent-kernel/tools';
 import { SafeStorageEngine } from '../agent-kernel/storage';
 import { LLMCore, DeterministicBackend } from '../agent-kernel/llm-core';
 import { SessionManager } from '../agent-kernel/session';
+import { ResourceQuotaGuard } from '../agent-kernel/quota';
 
 export interface BootOptions {
   profile?: ProfileName;
@@ -118,19 +119,26 @@ export class Bootloader {
 
       const subsystems: { agentKernel?: any; hermes?: any; editor?: any } = {};
 
-      // نواة وكيل حقيقية (بدل mock): LLMCore + ToolRegistry + SessionManager
+      // نواة وكيل حقيقية (بدل mock): LLMCore + ToolRegistry (موصول بسجل الأوامر) + SessionManager (موصول بالحصص)
       if (this._profileConfig.enableAgentKernel) {
         const llm = new LLMCore({
           backends: [new DeterministicBackend({
             defaultResponse: 'Deterministic response from local agent'
           })]
         });
+        const quotaGuard = new ResourceQuotaGuard();
+        const sessions = new SessionManager(this._kernel.getContext().events, quotaGuard);
+        const tools = new ToolRegistry(this._kernel.getContext().commands);
         subsystems.agentKernel = {
           name: 'AgentKernel',
           status: 'active',
+          llmCore: llm,
           llm,
-          toolRegistry: new ToolRegistry(),
-          sessions: new SessionManager(),
+          quotaGuard,
+          sessions,
+          tools,
+          toolRegistry: tools,
+          sessionMgr: sessions,
           chat: async (msg: string): Promise<string> => {
             const res = await llm.chat([{ role: 'user', content: String(msg ?? '') }]);
             return res.isOk ? res.value.content : `Agent error: ${res.error.message}`;
@@ -138,13 +146,14 @@ export class Bootloader {
         };
       }
 
-      // نواة هيرمس حقيقية (HermesKernel) بدل mock — تعريض serve/learn عبر البوابة
+      // نواة هيرمس حقيقية (HermesKernel) بدل mock — تعريض serve/learn/hermesKernel عبر البوابة
       if (this._profileConfig.enableHermes) {
         const hermesKernel = new HermesKernel(new ToolRegistry(), new SafeStorageEngine());
         subsystems.hermes = {
           name: 'Hermes',
           status: 'active',
           kernel: hermesKernel,
+          hermesKernel,
           serve: (input: string, toolName?: string, toolArgs?: any) =>
             hermesKernel.serve(input, toolName, toolArgs),
           learn: async (topic: string): Promise<string> => {

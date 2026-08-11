@@ -9,7 +9,11 @@ import {
   NawatRuntime,
   VirtualFileSystem,
   loadConfigFile,
-  HermesKernel
+  HermesKernel,
+  ToolRegistry,
+  CommandRegistry,
+  SessionManager,
+  ResourceQuotaGuard
 } from '../src/index';
 
 describe('Host Layer & Bootloader (محمل الإقلاع والطبقة المستضيفة)', () => {
@@ -114,6 +118,99 @@ describe('Host Layer & Bootloader (محمل الإقلاع والطبقة الم
       expect(cmdRes.output).toBeTruthy();
 
       await bootloader.shutdown();
+    });
+  });
+
+  describe('Merged Integration (syscall dispatch / tool-command bridge / session quota / VFS storage)', () => {
+    it('executeSyscall dispatches a real registered command and emits syscall:executed', async () => {
+      const bootloader = new Bootloader({ profile: 'agent' });
+      const runtime = await bootloader.boot();
+
+      const res = await runtime.executeSyscall('agent.llm.chat', { msg: 'syscall-hi' });
+      expect(res.output).toBeTruthy();
+
+      const events = runtime.kernel.getContext().events.recent();
+      expect(events.some(e => e.name === 'syscall:executed')).toBe(true);
+
+      await bootloader.shutdown();
+    });
+
+    it('cancels a long-running syscall on shutdown without unhandled rejection', async () => {
+      const bootloader = new Bootloader({ profile: 'agent' });
+      const runtime = await bootloader.boot();
+
+      runtime.kernel.getContext().commands.register({
+        id: 'slow.cmd',
+        title: { ar: 'بطيء', en: 'Slow' },
+        category: { ar: 'مؤقت', en: 'Temp' },
+        description: { ar: '', en: '' },
+        handler: () => new Promise(res => setTimeout(res, 2000))
+      });
+
+      const pending = runtime.executeSyscall('slow.cmd', {});
+      const errorPromise = pending.then(() => null, (err: any) => err);
+
+      await bootloader.shutdown({ timeoutMs: 1000 });
+
+      const err = await errorPromise;
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toMatch('ECANCELED');
+
+      await new Promise(res => setTimeout(res, 20));
+    });
+
+    it('registers tools as kernel commands via ToolRegistry<->CommandRegistry bridge', async () => {
+      const commands = new CommandRegistry();
+      const tools = new ToolRegistry(commands);
+
+      expect(commands.has('tool.echo')).toBe(true);
+      expect(commands.has('tool.now')).toBe(true);
+
+      const res = await commands.execute('tool.echo', 'bridge-ok');
+      expect(res.isOk).toBe(true);
+      if (res.isOk) {
+        const inner: any = res.value;
+        expect(inner.isOk).toBe(true);
+        expect(inner.value).toBe('bridge-ok');
+      }
+    });
+
+    it('session executeRequest enforces ResourceQuotaGuard and rejects on excess', async () => {
+      const guard = new ResourceQuotaGuard();
+      guard.setQuota('agent-x', { maxSyscallsPerMinute: 2 });
+      const manager = new SessionManager(undefined, guard);
+      const created = manager.createSession('sess_q', 'agent-x');
+      expect(created.isOk).toBe(true);
+      if (!created.isOk) throw created.error;
+      const session = created.value;
+
+      expect(session.executeRequest('a').isOk).toBe(true);
+      expect(session.executeRequest('b').isOk).toBe(true);
+
+      const third = session.executeRequest('c');
+      expect(third.isErr).toBe(true);
+      if (third.isErr) {
+        expect(third.error.message).toContain('EQUOTA_EXCEEDED');
+      }
+    });
+
+    it('VFS persists file writes through SafeStorageEngine (read/exists/delete)', async () => {
+      const vfs = new VirtualFileSystem('/vfs-test');
+      vfs.mount();
+
+      const writeRes = await vfs.writeFile('notes/hello.txt', 'مرحبا');
+      expect(writeRes.isOk).toBe(true);
+      expect(await vfs.exists('notes/hello.txt')).toBe(true);
+
+      const readRes = await vfs.readFile('notes/hello.txt');
+      expect(readRes.isOk).toBe(true);
+      if (readRes.isOk) expect(readRes.value).toBe('مرحبا');
+
+      const delRes = await vfs.deleteFile('notes/hello.txt');
+      expect(delRes.isOk).toBe(true);
+      expect(await vfs.exists('notes/hello.txt')).toBe(false);
+
+      vfs.dispose();
     });
   });
 

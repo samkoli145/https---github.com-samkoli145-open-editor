@@ -3,6 +3,7 @@ import { Result, ok, err } from '../kernel/core/result';
 import { DisposableStore } from '../kernel/core/disposable';
 import { type ProfileConfig } from './profiles';
 import { VirtualFileSystem } from './vfs';
+import { AgentSyscall, AgentSyscallQueue } from '../agent-kernel/syscalls';
 
 export type RuntimeState =
   | 'initialized'
@@ -56,6 +57,7 @@ export class NawatRuntime {
   private bootDurationMs: number = 0;
   public readonly disposables = new DisposableStore();
   public readonly pendingSyscalls = new Map<string, { reject: (reason: any) => void }>();
+  public readonly syscallQueue = new AgentSyscallQueue();
 
   public agentKernel?: Record<string, any>;
   public hermes?: Record<string, any>;
@@ -117,28 +119,76 @@ export class NawatRuntime {
 
   /**
    * Dispatches a system call through the host runtime layer.
-   * Tracks active syscall handles in `pendingSyscalls` to enable graceful cancellation during
-   * runtime shutdown (`ECANCELED`) or forced process termination (`EKILLED`).
+   * Processes actively via `AgentSyscallQueue` + real CommandRegistry execution, emitting
+   * `syscall:executed` events. Tracks active syscall handles in `pendingSyscalls` to enable
+   * graceful cancellation during runtime shutdown (`ECANCELED`) or forced process
+   * termination (`EKILLED`). Internal rejection handlers prevent unhandled promise rejections.
    */
   public async executeSyscall(id: string, payload: any): Promise<any> {
     if (this.state !== 'running') {
       throw new Error('ENOTREADY: Runtime is not running');
     }
 
-    return new Promise((resolve, reject) => {
-      const syscallKey = `${id}_${Date.now()}_${Math.random()}`;
-      const timeoutTimer = setTimeout(() => {
-        this.pendingSyscalls.delete(syscallKey);
-        resolve({ success: true, payload });
-      }, 50);
-
-      this.pendingSyscalls.set(syscallKey, {
-        reject: (err) => {
-          clearTimeout(timeoutTimer);
-          reject(err);
-        }
-      });
+    const syscall = new AgentSyscall({
+      name: id,
+      payload,
+      owner: 'runtime'
     });
+
+    this.syscallQueue.enqueue(syscall);
+
+    const p = new Promise<any>((resolve, reject) => {
+      const handle = {
+        reject: (reason: any) => {
+          syscall.markCanceled(reason);
+          reject(reason);
+        }
+      };
+
+      this.pendingSyscalls.set(syscall.id, handle);
+
+      // معالجة فعّالة: سحب من الطابور وتنفيذ الأمر عبر CommandRegistry إن وُجد
+      Promise.resolve().then(async () => {
+        const currentSyscall = this.syscallQueue.dequeue() || syscall;
+        if (currentSyscall.isCanceled()) return;
+        currentSyscall.markRunning();
+
+        try {
+          let result: any;
+          if (this.kernel.getContext().commands.has(id)) {
+            const cmdRes = await this.kernel.getContext().commands.execute(id, payload);
+            if (currentSyscall.isCanceled()) return;
+            if (cmdRes.isOk) {
+              result = cmdRes.value;
+            } else {
+              throw cmdRes.error;
+            }
+          } else {
+            result = { success: true, payload };
+          }
+
+          currentSyscall.markCompleted(result);
+          this.pendingSyscalls.delete(syscall.id);
+          this.kernel.getContext().events.emit('syscall:executed', {
+            id: currentSyscall.id,
+            name: id,
+            status: 'completed',
+            latencyMs: currentSyscall.getLatencyMs()
+          });
+          resolve(result);
+        } catch (err: any) {
+          if (currentSyscall.isCanceled()) return;
+          const error = err instanceof Error ? err : new Error(String(err));
+          currentSyscall.markFailed(error);
+          this.pendingSyscalls.delete(syscall.id);
+          reject(error);
+        }
+      }).catch(() => {});
+    });
+
+    // يمنع الرفض غير المعالج أثناء shutdown مع بقاء الرفض متاحاً للمتصل المتابِع
+    p.catch(() => {});
+    return p;
   }
 
   public async executeCommand(id: string, payload: any): Promise<any> {

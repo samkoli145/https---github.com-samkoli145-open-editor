@@ -47,6 +47,8 @@ export class AgentSyscall {
       this.resolveDone = resolve;
       this.rejectDone = reject;
     });
+    // منع الرفض غير المعالج عند markCanceled/markFailed أثناء shutdown/forceKill
+    this.donePromise.catch(() => {});
   }
 
   public markRunning(): void {
@@ -77,6 +79,10 @@ export class AgentSyscall {
     this.completedAt = Date.now();
     this.error = typeof reason === 'string' ? new Error(reason) : reason;
     this.rejectDone(this.error);
+  }
+
+  public isCanceled(): boolean {
+    return this.status === 'canceled';
   }
 
   public async awaitDone(): Promise<Result<any, Error>> {

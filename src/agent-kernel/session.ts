@@ -1,5 +1,6 @@
 import { Result, ok, err } from '../kernel/core/result';
 import { EventBus } from '../kernel/core/event-bus';
+import { ResourceQuotaGuard } from './quota';
 
 export type SessionState = 'idle' | 'busy' | 'interrupted' | 'closed';
 
@@ -22,15 +23,33 @@ export class SessionInstance {
   public readonly createdAt: number;
   public lastActiveAt: number;
   public metadata: Record<string, any>;
+  public quotaGuard?: ResourceQuotaGuard;
 
   private streamListeners = new Set<SessionStreamHandler>();
 
-  constructor(id: string, ownerAgent: string = 'system', metadata: Record<string, any> = {}) {
+  constructor(id: string, ownerAgent: string = 'system', metadata: Record<string, any> = {}, quotaGuard?: ResourceQuotaGuard) {
     this.id = id;
     this.ownerAgent = ownerAgent;
     this.createdAt = Date.now();
     this.lastActiveAt = Date.now();
     this.metadata = metadata;
+    this.quotaGuard = quotaGuard;
+  }
+
+  public executeRequest(content: any): Result<void, Error> {
+    if (this.state === 'closed') {
+      return err(new Error(`ECLOSED: Session '${this.id}' is closed`));
+    }
+    if (this.quotaGuard) {
+      const quotaCheck = this.quotaGuard.trackSyscall(this.ownerAgent);
+      if (!quotaCheck.isOk) {
+        this.emitStream('interrupt_request', { error: quotaCheck.error.message });
+        return err(quotaCheck.error);
+      }
+    }
+    this.state = 'busy';
+    this.emitStream('execute_request', content);
+    return ok(undefined);
   }
 
   public touch(): void {
@@ -69,9 +88,15 @@ export class SessionInstance {
 export class SessionManager {
   private sessions = new Map<string, SessionInstance>();
   private eventBus?: EventBus;
+  private quotaGuard?: ResourceQuotaGuard;
 
-  constructor(eventBus?: EventBus) {
+  constructor(eventBus?: EventBus, quotaGuard?: ResourceQuotaGuard) {
     this.eventBus = eventBus;
+    this.quotaGuard = quotaGuard;
+  }
+
+  public attachQuotaGuard(guard: ResourceQuotaGuard): void {
+    this.quotaGuard = guard;
   }
 
   public createSession(id: string, ownerAgent: string = 'system', metadata: Record<string, any> = {}): Result<SessionInstance, Error> {
@@ -82,7 +107,7 @@ export class SessionManager {
       return err(new Error(`EEXIST: Session '${id}' already exists`));
     }
 
-    const session = new SessionInstance(id, ownerAgent, metadata);
+    const session = new SessionInstance(id, ownerAgent, metadata, this.quotaGuard);
     this.sessions.set(id, session);
     this.eventBus?.emit('session:created', { sessionId: id, ownerAgent });
     return ok(session);

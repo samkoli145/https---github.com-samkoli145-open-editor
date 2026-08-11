@@ -1,4 +1,5 @@
 import { Result, ok, err } from '../kernel/core/result';
+import { CommandRegistry } from '../kernel/command-registry';
 
 export interface ToolDefinition {
   name: string;
@@ -15,9 +16,29 @@ export interface ToolExecutionContext {
 
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>();
+  private commandRegistry?: CommandRegistry;
 
-  constructor() {
+  constructor(commandRegistry?: CommandRegistry) {
+    this.commandRegistry = commandRegistry;
     this.registerBuiltInTools();
+  }
+
+  public attachCommandRegistry(registry: CommandRegistry): void {
+    this.commandRegistry = registry;
+    for (const tool of this.tools.values()) {
+      this.syncToolToCommand(tool);
+    }
+  }
+
+  private syncToolToCommand(def: ToolDefinition): void {
+    if (!this.commandRegistry) return;
+    this.commandRegistry.register({
+      id: `tool.${def.name}`,
+      title: { ar: `أداة ${def.name}`, en: `Tool ${def.name}` },
+      category: { ar: 'الأدوات', en: 'Tools' },
+      description: { ar: def.description, en: def.description },
+      handler: (args: any) => this.executeTool(def.name, args)
+    });
   }
 
   public registerTool(def: ToolDefinition): Result<void, Error> {
@@ -31,6 +52,7 @@ export class ToolRegistry {
       }
     }
     this.tools.set(def.name, def);
+    this.syncToolToCommand(def);
     return ok(undefined);
   }
 

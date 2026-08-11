@@ -11,6 +11,10 @@ import {
   scanProject,
   createToken,
   localize,
+  HermesAdapter,
+  HermesKernel,
+  LLMCore,
+  DeterministicBackend,
   type LocalizedString,
   type Extension
 } from './src/index';
@@ -360,6 +364,17 @@ app.post('/api/arch/execute', async (req, res) => {
     agentId: typeof agentId === 'string' && agentId ? agentId : undefined
   });
   audit('arch.execute', `command='${commandLine}' verdict=${result.verdict} status=${result.status}`);
+
+  // إشعار EventBus لكل تنفيذ أرش (قبول/رفض) — يظهر في سجل اللوحة
+  context.events.emit('arch:command_executed', {
+    commandLine,
+    verdict: result.verdict,
+    status: result.status,
+    exitCode: result.exitCode,
+    executionTimeMs: result.executionTimeMs,
+    timestamp: Date.now()
+  });
+
   res.json({
     command: result.command,
     status: result.status,
@@ -383,6 +398,74 @@ app.get('/api/arch/history', (_req, res) => {
 app.get('/api/arch/status', (_req, res) => {
   const usage = archLayer.getQuotaGuard().getUsage('web-arch');
   res.json({ enabled: true, defaultAgentId: 'web-arch', syscallCount: usage.syscallCount, errorCount: usage.errorCount });
+});
+
+// OpenAI-Compatible Chat Completions & Hermes Integration
+app.post('/api/v1/chat/completions', async (req, res) => {
+  try {
+    const { model = 'hermes-3-llama-3.1-8b', messages } = req.body ?? {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'messages array is required' });
+    }
+
+    const lastMessage = messages[messages.length - 1];
+    const userPrompt = lastMessage?.content || 'Hello';
+
+    let content: string;
+    const hermesInstance: HermesKernel = runtime.hermes?.hermesKernel || new HermesKernel();
+    const serveRes = await hermesInstance.serve(userPrompt);
+    if (serveRes.isOk) {
+      content = serveRes.value.result !== undefined
+        ? String(serveRes.value.result)
+        : `Hermes executed: ${userPrompt}`;
+    } else {
+      // Fallback عبر LLMCore الحقيقي (chat — لا generateResponse)
+      const llm = runtime.agentKernel?.llmCore ||
+        new LLMCore({ backends: [new DeterministicBackend()] });
+      const llmRes = await llm.chat([{ role: 'user', content: userPrompt }]);
+      content = llmRes.isOk ? llmRes.value.content : `Response to: ${userPrompt}`;
+    }
+
+    const response = HermesAdapter.formatOpenAIResponse(model, content);
+    audit('hermes.chat.completions', `model='${model}' prompt='${userPrompt}'`);
+    res.json(response);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to process completion' });
+  }
+});
+
+app.post('/api/hermes/serve', async (req, res) => {
+  const { input, toolName, toolArgs } = req.body ?? {};
+  if (!input) return res.status(400).json({ error: 'input string required' });
+  const hermesInstance: HermesKernel = runtime.hermes?.hermesKernel || new HermesKernel();
+  const result = await hermesInstance.serve(input, toolName, toolArgs);
+  if (result.isOk) {
+    res.json({ success: true, data: result.value });
+  } else {
+    res.status(400).json({ success: false, error: result.error.message });
+  }
+});
+
+app.post('/api/hermes/train', async (req, res) => {
+  const { topic, title, content, sessionId = 'web-session' } = req.body ?? {};
+  if (!topic && !content) return res.status(400).json({ error: 'topic or content required' });
+  const hermesInstance: HermesKernel = runtime.hermes?.hermesKernel || new HermesKernel();
+  const text = content || topic;
+  const result = await hermesInstance.learn({
+    sessionId,
+    materials: [{
+      id: `mat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      type: 'fact',
+      content: `${title ? title + ': ' : ''}${text}`,
+      priority: 'normal'
+    }]
+  });
+  if (result.isOk) {
+    audit('hermes.train', `session='${sessionId}' material='${title || topic}'`);
+    res.json({ success: true, report: result.value });
+  } else {
+    res.status(400).json({ success: false, error: result.error.message });
+  }
 });
 
 app.get('/api/audit', (_req, res) => {
