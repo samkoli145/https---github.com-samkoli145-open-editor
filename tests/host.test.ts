@@ -212,6 +212,57 @@ describe('Host Layer & Bootloader (محمل الإقلاع والطبقة الم
 
       vfs.dispose();
     });
+
+    it('concurrent syscalls execute with their own dequeued identity (no semantic interference)', async () => {
+      const bootloader = new Bootloader({ profile: 'agent' });
+      const runtime = await bootloader.boot();
+
+      runtime.kernel.getContext().commands.register({
+        id: 'echo.sys',
+        title: { ar: 'صدى', en: 'Echo' },
+        category: { ar: 'مؤقت', en: 'Temp' },
+        description: { ar: '', en: '' },
+        handler: (payload: any) => ({ echoed: payload })
+      });
+
+      const calls = Array.from({ length: 8 }, (_, i) =>
+        runtime.executeSyscall('echo.sys', { tag: `call-${i}` })
+      );
+
+      const results = await Promise.all(calls);
+      results.forEach((r, i) => {
+        expect((r as any).echoed).toEqual({ tag: `call-${i}` });
+      });
+
+      const events = runtime.kernel.getContext().events.recent()
+        .filter(e => e.name === 'syscall:executed' && (e.payload as any).name === 'echo.sys');
+      expect(events.length).toBe(8);
+      events.forEach((e, i) => {
+        expect((e.payload as any).id).toBeTruthy();
+      });
+
+      await bootloader.shutdown();
+    });
+
+    it('agent profile binds a SafeStorageEngine as agentKernel.storage', async () => {
+      const bootloader = new Bootloader({ profile: 'agent' });
+      await bootloader.boot();
+      expect(bootloader.agentKernel).toBeDefined();
+      expect(bootloader.agentKernel!.storage).toBeDefined();
+      await bootloader.shutdown();
+    });
+
+    it('hermes serveText extracts text result and status from the SymbolicLoop safely', async () => {
+      const bootloader = new Bootloader({ profile: 'hermes' });
+      await bootloader.boot();
+
+      const res = await bootloader.hermes!.serveText('اقسم 6 على 2');
+      expect(typeof res).toBe('object');
+      expect(['success', 'blocked', 'error']).toContain(res.status);
+      expect(typeof res.output).toBe('string');
+
+      await bootloader.shutdown();
+    });
   });
 
   describe('REST API Lifecycle Safety', () => {

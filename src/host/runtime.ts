@@ -147,16 +147,21 @@ export class NawatRuntime {
 
       this.pendingSyscalls.set(syscall.id, handle);
 
-      // معالجة فعّالة: سحب من الطابور وتنفيذ الأمر عبر CommandRegistry إن وُجد
+      // معالجة فعّالة: سحب من الطابور وتنفيذ الأمر عبر CommandRegistry إن وُجد.
+      // دلالات العنصر المسحوب فعلياً: نستعمل هوية syscall الحقيقي المستخرج من الطابور
+      // (sysName / sysPayload / currentSyscall.id) لا متغيرات الإغلاق، حتى لا يحدث تداخل
+      // دلالي بين استدعاءات متزامنة (كل استدعاء ينفّذ بأمره ومعاملاته ومعرّفه الخاص).
       Promise.resolve().then(async () => {
         const currentSyscall = this.syscallQueue.dequeue() || syscall;
+        const sysName = currentSyscall.name;
+        const sysPayload = currentSyscall.payload;
         if (currentSyscall.isCanceled()) return;
         currentSyscall.markRunning();
 
         try {
           let result: any;
-          if (this.kernel.getContext().commands.has(id)) {
-            const cmdRes = await this.kernel.getContext().commands.execute(id, payload);
+          if (this.kernel.getContext().commands.has(sysName)) {
+            const cmdRes = await this.kernel.getContext().commands.execute(sysName, sysPayload);
             if (currentSyscall.isCanceled()) return;
             if (cmdRes.isOk) {
               result = cmdRes.value;
@@ -164,14 +169,14 @@ export class NawatRuntime {
               throw cmdRes.error;
             }
           } else {
-            result = { success: true, payload };
+            result = { success: true, payload: sysPayload };
           }
 
           currentSyscall.markCompleted(result);
-          this.pendingSyscalls.delete(syscall.id);
+          this.pendingSyscalls.delete(currentSyscall.id);
           this.kernel.getContext().events.emit('syscall:executed', {
             id: currentSyscall.id,
-            name: id,
+            name: sysName,
             status: 'completed',
             latencyMs: currentSyscall.getLatencyMs()
           });
@@ -180,7 +185,7 @@ export class NawatRuntime {
           if (currentSyscall.isCanceled()) return;
           const error = err instanceof Error ? err : new Error(String(err));
           currentSyscall.markFailed(error);
-          this.pendingSyscalls.delete(syscall.id);
+          this.pendingSyscalls.delete(currentSyscall.id);
           reject(error);
         }
       }).catch(() => {});

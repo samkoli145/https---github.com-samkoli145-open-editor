@@ -62,6 +62,8 @@ export interface LinuxArchExecutionLayerOptions {
   execRoot?: string;
   rejectHiddenFiles?: boolean;
   enforceExecRoot?: boolean;
+  rejectSetuidSetgid?: boolean;
+  isolateAbsoluteTargets?: boolean;
 }
 
 export interface LinuxArchRecord {
@@ -104,6 +106,8 @@ export class LinuxArchExecutionLayer {
   private readonly execRoot?: string;
   private readonly rejectHiddenFiles: boolean;
   private readonly enforceExecRoot: boolean;
+  private readonly rejectSetuidSetgid: boolean;
+  private readonly isolateAbsoluteTargets: boolean;
   private readonly records: LinuxArchRecord[] = [];
 
   constructor(options: LinuxArchExecutionLayerOptions = {}) {
@@ -115,6 +119,8 @@ export class LinuxArchExecutionLayer {
     this.execRoot = options.execRoot;
     this.rejectHiddenFiles = options.rejectHiddenFiles ?? false;
     this.enforceExecRoot = options.enforceExecRoot ?? true;
+    this.rejectSetuidSetgid = options.rejectSetuidSetgid ?? true;
+    this.isolateAbsoluteTargets = options.isolateAbsoluteTargets ?? true;
 
     for (const rule of [...CODE_DOMAIN_PROFILE.defaultConstraints, ...ARCH_SAFETY_RULES, ...(options.extraRules ?? [])]) {
       this.constraintEngine.addRule(rule);
@@ -219,7 +225,7 @@ export class LinuxArchExecutionLayer {
 
     // عزل الأهداف المطلقة (data-domain): منع الأوامر المسموحة من لمس مسارات مطلقة خارج الجذر
     // (مثل: cat /etc/shadow · rm /etc/x · find / -name passwd) بينما تبقى النسبية داخل الجذر مسموحة.
-    if (this.enforceExecRoot) {
+    if (this.isolateAbsoluteTargets) {
       for (const target of parsed.targets) {
         if (!target.startsWith('/')) continue;
         let resolved: string;
@@ -256,7 +262,7 @@ export class LinuxArchExecutionLayer {
       if (inspected.kind === 'special') {
         return denied('blocked', `EPERM: '${parsed.toolName}' is not a regular file (device/socket/fifo)`);
       }
-      if (inspected.privileged) {
+      if (this.rejectSetuidSetgid && inspected.privileged) {
         return denied(
           'blocked',
           `ESECURITY: '${parsed.toolName}' is setuid/setgid (mode 0o${inspected.mode.toString(8)}): privilege escalation is prohibited`

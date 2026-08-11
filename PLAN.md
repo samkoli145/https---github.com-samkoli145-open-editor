@@ -23,11 +23,11 @@ src/  (55 ملفاً TS · 4845 سطراً)
 │                    logic/ (9/334)
 └── system/        النظام: 7 ملفات / 143 سطراً + engine/ (2/164) + vfs/ (3/405)
 
-bin/nawat.ts (71) · server.ts (703) · tests/ (10 ملفات · 166 اختباراً)
+bin/nawat.ts (71) · server.ts (703) · tests/ (11 ملفات · 194 اختباراً)
 ```
 
 **الحالة المثبتة اليوم (آخر تحقق):**
-- `bun install` ناجح · `tsc --noEmit` **نظيف** · `bun run build` **نظيف** (dist/server.cjs 67KB) · **166/166 اختباراً أخضر** (10 ملفات، ~1.3s).
+- `bun install` ناجح · `tsc --noEmit` **نظيف** · `bun run build` **نظيف** (dist/server.cjs 67KB) · **194/194 اختباراً أخضر** (11 ملفات، ~1.4s).
 
 ---
 
@@ -120,5 +120,6 @@ bin/nawat.ts (71) · server.ts (703) · tests/ (10 ملفات · 166 اختبا�
 | اليوم | طبقة `LinuxArchExecutionLayer` (تنفيذ حقيقي + بوابات أرش) · دعم الملفات المجهولة (shebang/ثنائي مجهول) · تحصين الملفات المخفية (جذر realpath · Unicode · devices · dotfiles) | `tsc` نظيف · **166/166** |
 | اليوم | دمج الطبقة في `server.ts`: `/api/arch/execute` + `/api/arch/history` + `/api/arch/status` + تبويب لوحة (RTL) — اختُبرت E2E بالـcurl | `tsc` نظيف · `build` نظيف · curl: allowed/blocked/audit ✓ |
 | اليوم | **دمج مراجعة الطرف الخارجي فوق تحصيناتنا** — إصلاح الوعود غير المعالجة (`donePromise.catch` + `isCanceled`) · `executeSyscall` حقيقي عبر الطابور وسجل الأوامر + `syscall:executed` · جسر Tool↔Command · ربط Session↔Quota · VFS مدعوم بـ`SafeStorageEngine` · `/api/v1/chat/completions` + `/api/hermes/serve` + `/api/hermes/train` + حدث `arch:command_executed` — مع **الإبقاء على الحماية** (127.0.0.1 + X-API-Key + جذور فحص + تدقيق + رفض setuid + عزل جذر التنفيذ) · أصلحنا `LLMCore` الخاطئ في endpoint الطرف الخارجي (chat بدل generateResponse) | `tsc` نظيف · `build` نظيف · **187/187** · E2E: 401 بلا مفتاح ✓ · completion ✓ · serve ✓ · train ✓ · scan /etc→403 ✓ · cat /etc→denied ✓ |
+| اليوم | **تبنّي فكرة حل الطرف الخارجي (لا نسخته)** — ① خيارات عزل مُسمّاة: `rejectSetuidSetgid`/`isolateAbsoluteTargets` (افتراضي true) منفصلة عن `enforceExecRoot` · ② دلالات العنصر المسحوب فعلياً في `executeSyscall`: تنفيذ بـ`sysName`/`sysPayload`/`currentSyscall.id` لا بمتغيرات الإغلاق (لا تداخل دلالي بين استدعاءات متزامنة) · ③ `agentKernel.storage = SafeStorageEngine` · ④ `hermes.serveText` يستخرج النص/الحالة من `SymbolicLoop` بأمان · مع بقاء رفض setuid الافتراضي والـ`LLMCore.chat` الصحيح (أُنجزا سابقاً) | `tsc` نظيف · **194/194** · اختبارات: خيارا العزل (مُفعّل/مُعطّل) · 8 استدعاءات متزامنة بهويات مستقلة ✓ · `storage`/`serveText` ✓ |
 | اليوم | **ربط حقيقي للنواة العليا/هيرمس في المستضيف** — استبدال الأشباح في `bootloader.initializeKernel`: `HermesKernel` حقيقي (enableHermes) + نواة وكيل عبر `LLMCore`/`ToolRegistry`/`SessionManager` (enableAgentKernel)؛ الأوامر `hermes.learn`/`agent.llm.chat` توصل النواة الحقيقية | `tsc` نظيف · **182/182** · اختباران: `instanceof HermesKernel` + serve/learn/chat عبر نواة حقيقية |
 | اليوم | **ماسح المشروع الخارجي** `scanProject` (مخفي/قابل تنفيذ/setuid/هروب/مزروع/معبث/مفقود) + `/api/projects/scan` + تبويب لوحة — E2E بالـcurl ✓ · سُجّلت فجوات أمنية §5 (ن→ف) | `tsc` نظيف · `build` نظيف · **172/172** · curl: 6 فئات إيجابية + baseline tampered ✓ |

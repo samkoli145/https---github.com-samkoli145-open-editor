@@ -132,6 +132,7 @@ export class Bootloader {
         subsystems.agentKernel = {
           name: 'AgentKernel',
           status: 'active',
+          storage: new SafeStorageEngine(),
           llmCore: llm,
           llm,
           quotaGuard,
@@ -156,6 +157,16 @@ export class Bootloader {
           hermesKernel,
           serve: (input: string, toolName?: string, toolArgs?: any) =>
             hermesKernel.serve(input, toolName, toolArgs),
+          serveText: async (input: string, toolName?: string, toolArgs?: any): Promise<{ status: string; output: string }> => {
+            const res = await hermesKernel.serve(input, toolName, toolArgs);
+            if (res.isErr) {
+              return { status: 'error', output: String(res.error?.message ?? res.error) };
+            }
+            const value = res.value ?? {};
+            const status = (value as any)?.status ?? 'completed';
+            const output = (value as any)?.result ?? (value as any)?.value ?? (value as any)?.reason ?? '';
+            return { status: String(status), output: String(output ?? '') };
+          },
           learn: async (topic: string): Promise<string> => {
             const res = await hermesKernel.learn({
               sessionId: 'boot',

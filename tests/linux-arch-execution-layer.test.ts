@@ -439,4 +439,48 @@ describe('Nawat LinuxArchExecutionLayer (Arch Linux Kernel Execution Layer)', ()
       expect(res.status).toBe('success');
     });
   });
+
+  // -------------------------------------------------------------------
+  // 11. Named isolation options (solution idea): rejectSetuidSetgid + isolateAbsoluteTargets
+  // -------------------------------------------------------------------
+  describe('named isolation options (rejectSetuidSetgid / isolateAbsoluteTargets)', () => {
+    const permissiveLayer = new LinuxArchExecutionLayer({
+      execRoot: TMP,
+      rejectSetuidSetgid: false,
+      isolateAbsoluteTargets: false
+    });
+
+    const suidScript = join(TMP, 'suid-opt-tool.sh');
+
+    beforeAll(() => {
+      mkdirSync(TMP, { recursive: true });
+      writeFileSync(suidScript, '#!/usr/bin/env python3\nprint("opt")\n');
+      chmodSync(suidScript, 0o4755);
+    });
+
+    it('runs a setuid executable when rejectSetuidSetgid is disabled', async () => {
+      const res = await permissiveLayer.execute({ commandLine: './suid-opt-tool.sh', cwd: TMP });
+      expect(res.status).toBe('success');
+      expect(res.stdout).toContain('opt');
+    });
+
+    it('blocks the same setuid executable again when rejectSetuidSetgid is on (default)', async () => {
+      const strictLayer = new LinuxArchExecutionLayer({ execRoot: TMP });
+      const res = await strictLayer.execute({ commandLine: './suid-opt-tool.sh', cwd: TMP });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('setuid/setgid');
+    });
+
+    it('allows an absolute target outside the root when isolateAbsoluteTargets is disabled', async () => {
+      const res = await permissiveLayer.execute({ commandLine: 'cat /etc/hostname', cwd: TMP });
+      expect(res.status).toBe('success');
+    });
+
+    it('denies that absolute target when isolateAbsoluteTargets is on (default)', async () => {
+      const strictLayer = new LinuxArchExecutionLayer({ execRoot: TMP });
+      const res = await strictLayer.execute({ commandLine: 'cat /etc/hostname', cwd: TMP });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('resolves outside the execution root');
+    });
+  });
 });
