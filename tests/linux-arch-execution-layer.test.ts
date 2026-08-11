@@ -390,4 +390,53 @@ describe('Nawat LinuxArchExecutionLayer (Arch Linux Kernel Execution Layer)', ()
       expect(res.stdout).toContain('normal');
     });
   });
+
+  // -------------------------------------------------------------------
+  // 10. Exec-Root Enforcement (gap س — OS isolation without bubblewrap)
+  // -------------------------------------------------------------------
+  describe('exec-root enforcement (isolation of allowed commands)', () => {
+    const OUTSIDE = join(tmpdir(), `nawat-arch-rooted-${Date.now()}`);
+    const isolated = new LinuxArchExecutionLayer({ execRoot: TMP });
+
+    beforeAll(() => {
+      mkdirSync(OUTSIDE, { recursive: true });
+    });
+
+    afterAll(() => {
+      try {
+        rmSync(OUTSIDE, { recursive: true, force: true });
+      } catch {
+        /* noop */
+      }
+    });
+
+    it('runs bare commands inside the exec root by default (no cwd escape)', async () => {
+      const res = await isolated.execute({ commandLine: 'pwd' });
+      expect(res.status).toBe('success');
+      expect(res.stdout.trim()).toBe(TMP);
+    });
+
+    it('denies a working directory outside the exec root', async () => {
+      const res = await isolated.execute({ commandLine: 'echo hi', cwd: OUTSIDE });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('outside the execution root');
+    });
+
+    it('denies an absolute target outside the exec root (e.g. cat /etc/shadow)', async () => {
+      const res = await isolated.execute({ commandLine: 'cat /etc/hostname', cwd: TMP });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('resolves outside the execution root');
+    });
+
+    it('denies an absolute target even when it does not exist yet (e.g. touch /etc/x)', async () => {
+      const res = await isolated.execute({ commandLine: 'touch /etc/nawat-nonexistent-target', cwd: TMP });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('resolves outside the execution root');
+    });
+
+    it('allows relative targets inside the exec root', async () => {
+      const res = await isolated.execute({ commandLine: 'touch rooted-file.txt', cwd: TMP });
+      expect(res.status).toBe('success');
+    });
+  });
 });

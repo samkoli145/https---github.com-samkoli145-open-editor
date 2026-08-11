@@ -44,8 +44,8 @@ async function startServer() {
   const kernel = runtime.kernel;
   const context = kernel.getContext();
 
-  // LinuxArchExecutionLayer — تنفيذ أوامر أرش/ELF/سكربتات عبر بوابات النواة
-  const archLayer = new LinuxArchExecutionLayer({ defaultAgentId: 'web-arch' });
+  // LinuxArchExecutionLayer — تنفيذ أوامر أرش/ELF/سكربتات عبر بوابات النواة (عزل إلزامي داخل جذر المشروع)
+  const archLayer = new LinuxArchExecutionLayer({ defaultAgentId: 'web-arch', execRoot: process.cwd() });
 
   // Middleware guard for API readiness
   app.use('/api', (_req, res, next) => {

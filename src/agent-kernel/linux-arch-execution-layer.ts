@@ -61,6 +61,7 @@ export interface LinuxArchExecutionLayerOptions {
   maxExecutionTimeMs?: number;
   execRoot?: string;
   rejectHiddenFiles?: boolean;
+  enforceExecRoot?: boolean;
 }
 
 export interface LinuxArchRecord {
@@ -102,6 +103,7 @@ export class LinuxArchExecutionLayer {
   private readonly maxExecutionTimeMs: number;
   private readonly execRoot?: string;
   private readonly rejectHiddenFiles: boolean;
+  private readonly enforceExecRoot: boolean;
   private readonly records: LinuxArchRecord[] = [];
 
   constructor(options: LinuxArchExecutionLayerOptions = {}) {
@@ -112,6 +114,7 @@ export class LinuxArchExecutionLayer {
     this.maxExecutionTimeMs = options.maxExecutionTimeMs ?? 10000;
     this.execRoot = options.execRoot;
     this.rejectHiddenFiles = options.rejectHiddenFiles ?? false;
+    this.enforceExecRoot = options.enforceExecRoot ?? true;
 
     for (const rule of [...CODE_DOMAIN_PROFILE.defaultConstraints, ...ARCH_SAFETY_RULES, ...(options.extraRules ?? [])]) {
       this.constraintEngine.addRule(rule);
@@ -129,7 +132,7 @@ export class LinuxArchExecutionLayer {
       const token = tokens[i];
       if (token.startsWith('-')) {
         flags.push(token);
-      } else if (!subCommand && i === 1) {
+      } else if (!subCommand && i === 1 && !token.startsWith('/')) {
         subCommand = token;
       } else {
         targets.push(token);
@@ -183,6 +186,16 @@ export class LinuxArchExecutionLayer {
 
     const budgetMs = Math.max(1, Math.min(request.timeoutMs ?? this.maxExecutionTimeMs, this.maxExecutionTimeMs));
 
+    // عزل نظامي (فجوة س): جذر تنفيذ إلزامي — root = execRoot إن حُدّد، وإلا cwd الطلب، وإلا مجلد العمل الحالي.
+    let effectiveRoot: string;
+    const rootBase = this.execRoot ?? (request.cwd ? resolve(request.cwd) : process.cwd());
+    try {
+      effectiveRoot = realpathSync(rootBase);
+    } catch {
+      effectiveRoot = resolve(rootBase);
+    }
+    const rootPrefix = effectiveRoot.endsWith('/') ? effectiveRoot : `${effectiveRoot}/`;
+
     let cwd: string | undefined;
     if (request.cwd) {
       const sanitized = sanitizePath(request.cwd, '/');
@@ -192,7 +205,33 @@ export class LinuxArchExecutionLayer {
       if (!existsSync(request.cwd) || !statSync(request.cwd).isDirectory()) {
         return denied('error', `ENOENT: working directory '${request.cwd}' does not exist`);
       }
+      if (this.enforceExecRoot) {
+        const cwdReal = realpathSync(request.cwd);
+        if (cwdReal !== effectiveRoot && !cwdReal.startsWith(rootPrefix)) {
+          return denied('blocked', `ESECURITY: working directory '${request.cwd}' is outside the execution root`);
+        }
+      }
       cwd = request.cwd;
+    } else if (this.enforceExecRoot) {
+      // بدون cwd: يُنفَّذ داخل جذر التنفيذ لا داخل مجلد عمل الخادم.
+      cwd = effectiveRoot;
+    }
+
+    // عزل الأهداف المطلقة (data-domain): منع الأوامر المسموحة من لمس مسارات مطلقة خارج الجذر
+    // (مثل: cat /etc/shadow · rm /etc/x · find / -name passwd) بينما تبقى النسبية داخل الجذر مسموحة.
+    if (this.enforceExecRoot) {
+      for (const target of parsed.targets) {
+        if (!target.startsWith('/')) continue;
+        let resolved: string;
+        try {
+          resolved = realpathSync(target);
+        } catch {
+          resolved = resolve(target);
+        }
+        if (resolved !== effectiveRoot && !resolved.startsWith(rootPrefix)) {
+          return denied('blocked', `ESECURITY: target '${target}' resolves outside the execution root`);
+        }
+      }
     }
 
     let execPath = parsed.toolName;
