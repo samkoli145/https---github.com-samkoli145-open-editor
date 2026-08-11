@@ -150,8 +150,8 @@ kernel-project/
 | **أنواع أدوات الحلقة** | `ToolRegistry` + `LoopToolSet` | أي أداة تُسجَّل تُقاس تلقائياً (latency/confidence) |
 | **نماذج LLM** | `ILLMBackend` (Ollama أساسي) | llama.cpp / LM Studio / أي نهاية تلتزم الواجهة |
 | **العقل/المنطق** | `InferenceEngine` + `LogicDNA` | نوى مجالات جديدة عبر `kernel-forge` + الحصاد `retro-extractor`/`program-distiller` |
-| **تنفيذ أرش (ELF/أوامر)** | `LinuxArchExecutionLayer` — بوابات (code-domain → allowlist → quota → جذر تنفيذ → ELF/shebang) | عزل نظامي أعمق (bubblewrap/Landlock) · قوائم سماح لكل نمط · توقيعات ELF معمّقة (e_ident/e_type) · ربطه بـ`ToolRegistry`/`HermesKernel` |
-| **فحص مشروع خارجي** | `scanProject` — مخفي (نقطية/Unicode) · قابل تنفيذ · setuid/backdoor · هروب روابط · مزروع/معبث/مفقود مقابل `PersistentIndexer` | خط أساس دائم (مخزن SHA-256) · عزل أثناء الفحص · جداول `dist`/`node_modules` مخصّصة لكل مشروع |
+| **تنفيذ أرش (ELF/أوامر)** | `LinuxArchExecutionLayer` — بوابات (code-domain → allowlist → quota → جذر تنفيذ → فحص ELF عميق e_ident/e_type → إعادة تحقق TOCTOU قبل spawn → بصمات SHA-256 مخوّلة) | عزل نظامي أعمق (bubblewrap/Landlock) · قوائم سماح لكل نمط · ربطه بـ`ToolRegistry`/`HermesKernel` |
+| **فحص مشروع خارجي** | `scanProject` — مخفي (نقطية/Unicode) · قابل تنفيذ · setuid/backdoor · هروب روابط · مزروع/معبث/مفقود مقابل `PersistentIndexer` (SHA-256) | خط أساس دائم (مُخزَّن ذرّياً `.nawat-index.json` + غلاف SHA-256) · عزل أثناء الفحص · جداول `dist`/`node_modules` مخصّصة لكل مشروع |
 | **VFS/النظام** | `system/vfs` + `engine/base-engine` + `execution-sandbox` | مخزن قرص حقيقي + صندوق عزل مضيّق دون تغيير النواة |
 | **إضافات/وحدات** | `ExtensionManager` | تحميل وحدات معيارية فوق نواة ثابتة (نموذج GKI) |
 | **كرة الثلج** | مقاييس/معاملات قابلة للجمع | مصادر متعددة تُجمَّع في كرة تنمو (`snowball.ts`) |
@@ -169,7 +169,7 @@ kernel-project/
 - ⏳ المتبقي: اختبار Ollama حقيقي عند توفر نموذج · كرة الثلج · واجهة فاتحة · محرر كامل.
 - ✅ ربط حقيقي للنواة العليا/هيرمس في المستضيف: `HermesKernel` (serve/learn) + نواة وكيل عبر `LLMCore`/`ToolRegistry`/`SessionManager` — بدل الأشباح السابقة (§5-أ في `PLAN.md`).
 - ✅ دمج إصلاحات الطرف الخارجي فوق تحصيناتنا: الوعود غير المعالجة (`donePromise.catch`+`isCanceled`) · `executeSyscall` حقيقي (طابور + أوامر + `syscall:executed`) · جسر Tool↔Command (`tool.*`) · جلسات↔حصص (`EQUOTA_EXCEEDED`) · VFS مدعوم بالتخزين الآمن · `/api/v1/chat/completions` + `/api/hermes/serve` + `/api/hermes/train` + حدث `arch:command_executed` — مع الإبقاء على الحماية (غ/ع/س) والتدقيق.
-- ⚠️ فجوات أمنية مسجّلة (تتبع في `PLAN.md` §5): عولج **غ** (ربط 127.0.0.1 + مفتاح API + تقييد جذور الفحص + تدقيق) و**ع** (رفض setuid/setgid) و**س** (عزل بجذر تنفيذ إلزامي) — المتبقي: ن/ش/ف/ص/ض/طـ.
+- ⚠️ فجوات أمنية مسجّلة (تتبع في `PLAN.md` §5): عولج **غ** (ربط 127.0.0.1 + مفتاح API + تقييد جذور الفحص + تدقيق) و**ع** (رفض setuid/setgid) و**س** (عزل بجذر تنفيذ إلزامي) و**ن** (TOCTOU) و**ش** (فحص ELF عميق) و**ص/ف** (خط أساس دائم SHA-256) و**ل** (اختبار E2E آلي للخادم والـCLI) — المتبقي: ض (تم جزئياً) وطـ وو/م/ز/ح/ي/ك.
 - 📋 الحالة التفصيلية (ما تم · ما لم يُراجع · المتبقي · التحسينات) في **`PLAN.md`**.
 
 ---

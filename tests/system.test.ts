@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   sanitizePath,
   detectFileType,
+  inspectElfHeader,
   PersistentIndexer,
   SafeSystemStorageEngine,
   BaseSystemEngine,
@@ -61,6 +65,45 @@ describe('Nawat System Layer - Storage & VFS Infrastructure', () => {
     it('detects ELF Linux executable via magic bytes', () => {
       const elfHeader = new Uint8Array([0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00]);
       const res = detectFileType(elfHeader);
+      expect(res.ext).toBe('elf');
+      expect(res.isExecutable).toBe(true);
+    });
+
+    it('inspectElfHeader validates e_ident (class/endian/version) and e_type for deep ELF checks', () => {
+      // 64-bit little-endian ET_EXEC
+      const exec64 = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x02, 0x00]);
+      const infoExec = inspectElfHeader(exec64);
+      expect(infoExec).not.toBeNull();
+      expect(infoExec!.elfClass).toBe(64);
+      expect(infoExec!.endian).toBe('little');
+      expect(infoExec!.version).toBe(1);
+      expect(infoExec!.eTypeName).toBe('ET_EXEC');
+      expect(infoExec!.isExecutable).toBe(true);
+
+      // 32-bit big-endian ET_DYN (PIE)
+      const dyn32be = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x01, 0x02, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x03]);
+      const infoDyn = inspectElfHeader(dyn32be);
+      expect(infoDyn!.elfClass).toBe(32);
+      expect(infoDyn!.endian).toBe('big');
+      expect(infoDyn!.eTypeName).toBe('ET_DYN');
+      expect(infoDyn!.isExecutable).toBe(true);
+    });
+
+    it('rejects non-executable ELF types (ET_REL object) as data, not executable', () => {
+      const rel = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x00]);
+      const info = inspectElfHeader(rel);
+      expect(info).not.toBeNull();
+      expect(info!.eTypeName).toBe('ET_REL');
+      expect(info!.isExecutable).toBe(false);
+
+      const res = detectFileType(rel);
+      expect(res.ext).toBe('bin');
+      expect(res.isExecutable).toBe(false);
+    });
+
+    it('keeps truncated ELF signatures classified as executable (legacy magic-only)', () => {
+      const truncated = new Uint8Array([0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00]);
+      const res = detectFileType(truncated);
       expect(res.ext).toBe('elf');
       expect(res.isExecutable).toBe(true);
     });
@@ -169,6 +212,59 @@ describe('Nawat System Layer - Storage & VFS Infrastructure', () => {
       indexer.chmod('/vfs/script.sh', 0o700, 2000);
       expect(indexer.checkAccess('/vfs/script.sh', 'read', 1000).isOk).toBe(false);
       expect(indexer.checkAccess('/vfs/script.sh', 'read', 2000).isOk).toBe(true);
+    });
+
+    it('persists the index to disk and reloads it across sessions (syncToDisk/loadFromDisk)', () => {
+      const rootDir = mkdtempSync(join(tmpdir(), 'nawat-index-persist-'));
+      try {
+        const indexer = new PersistentIndexer(rootDir);
+        indexer.registerFile(join(rootDir, 'src', 'main.py'), '#!/usr/bin/env python3\nprint("hi")', undefined, 0o755);
+        indexer.registerFile(join(rootDir, 'notes', 'ideas.md'), '# ideas', undefined, 0o644);
+        indexer.syncToDisk();
+        indexer.dispose();
+
+        const reloaded = new PersistentIndexer(rootDir);
+        const loadRes = reloaded.loadFromDisk();
+        expect(loadRes.isOk).toBe(true);
+        expect(loadRes.isOk && loadRes.value).toBe(2);
+
+        const main = reloaded.getEntry(join(rootDir, 'src', 'main.py'));
+        expect(main.isOk).toBe(true);
+        if (main.isOk) {
+          expect(main.value.mode).toBe(0o755);
+          expect(main.value.isExecutable).toBe(true);
+          expect(main.value.checksum).toBe(PersistentIndexer.computeChecksum('#!/usr/bin/env python3\nprint("hi")'));
+        }
+        reloaded.dispose();
+      } finally {
+        rmSync(rootDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects a tampered index snapshot with EINTEGRITY on load', () => {
+      const rootDir = mkdtempSync(join(tmpdir(), 'nawat-index-tamper-'));
+      try {
+        const indexer = new PersistentIndexer(rootDir);
+        indexer.registerFile(join(rootDir, 'a.txt'), 'hello', undefined, 0o644);
+        indexer.syncToDisk();
+        indexer.dispose();
+
+        const snapshotPath = join(rootDir, '.nawat-index.json');
+        const raw = readFileSync(snapshotPath, 'utf8');
+        const checksum = PersistentIndexer.computeChecksum('hello');
+        const corrupted = raw.replace(checksum, checksum.slice(0, 20) + (checksum[20] === 'a' ? 'b' : 'a') + checksum.slice(21));
+        writeFileSync(snapshotPath, corrupted, 'utf8');
+
+        const reloaded = new PersistentIndexer(rootDir);
+        const loadRes = reloaded.loadFromDisk();
+        expect(loadRes.isErr).toBe(true);
+        if (loadRes.isErr) {
+          expect(loadRes.error.message).toContain('EINTEGRITY');
+        }
+        reloaded.dispose();
+      } finally {
+        rmSync(rootDir, { recursive: true, force: true });
+      }
     });
   });
 

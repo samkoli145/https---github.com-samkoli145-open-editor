@@ -1,17 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { PersistentIndexer, scanProject } from '../src/index';
 
 function bytesChecksum(buf: Uint8Array): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < buf.length; i++) {
-    hash ^= buf[i];
-    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
+  return createHash('sha256').update(buf).digest('hex');
 }
 
 const SHEBANG_PY = '#!/usr/bin/env python3\nprint("hi")';

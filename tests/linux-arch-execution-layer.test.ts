@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { closeSync, chmodSync, mkdirSync, openSync, readSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -496,6 +497,74 @@ describe('Nawat LinuxArchExecutionLayer (Arch Linux Kernel Execution Layer)', ()
       const res = await strictLayer.execute({ commandLine: 'cat /etc/hostname', cwd: TMP });
       expect(res.status).toBe('blocked');
       expect(res.reason).toContain('resolves outside the execution root');
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // 12. Deep ELF validation (ش) + TOCTOU re-check & authorizedSignatures (ن)
+  // -------------------------------------------------------------------
+  describe('deep ELF validation + TOCTOU post-check & authorizedSignatures', () => {
+    const relElf = join(TMP, 'rel.elf');
+    const sigTool = join(TMP, 'sig-tool.sh');
+    const swapTool = join(TMP, 'swap-tool.sh');
+
+    beforeAll(() => {
+      mkdirSync(TMP, { recursive: true });
+      // رأس ELF كامل: e_ident (64-bit little-endian v1) + e_type=1 (ET_REL) — ليس قابلاً للتنفيذ
+      writeFileSync(relElf, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x00]));
+      chmodSync(relElf, 0o755);
+
+      writeFileSync(sigTool, '#!/usr/bin/env python3\nprint("sig-ok")\n');
+      chmodSync(sigTool, 0o755);
+
+      writeFileSync(swapTool, '#!/usr/bin/env python3\nprint("PWNED")\n');
+      chmodSync(swapTool, 0o755);
+    });
+
+    it('blocks a non-executable ELF (ET_REL) despite exec bit — deep header check', async () => {
+      const layer = new LinuxArchExecutionLayer({ execRoot: TMP });
+      const res = await layer.execute({ commandLine: './rel.elf', cwd: TMP });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('ET_REL');
+    });
+
+    it('executes a program whose SHA-256 matches an authorized signature', async () => {
+      const goodSum = createHash('sha256').update('#!/usr/bin/env python3\nprint("sig-ok")\n').digest('hex');
+      const layer = new LinuxArchExecutionLayer({ execRoot: TMP, authorizedSignatures: { 'sig-tool.sh': [goodSum] } });
+      const res = await layer.execute({ commandLine: './sig-tool.sh', cwd: TMP });
+      expect(res.status).toBe('success');
+      expect(res.stdout).toContain('sig-ok');
+    });
+
+    it('denies execution when the on-disk content no longer matches the authorized signature (TOCTOU re-check)', async () => {
+      const originalSum = createHash('sha256').update('#!/usr/bin/env python3\nprint("orig")\n').digest('hex');
+      const layer = new LinuxArchExecutionLayer({ execRoot: TMP, authorizedSignatures: { 'swap-tool.sh': [originalSum] } });
+      const res = await layer.execute({ commandLine: './swap-tool.sh', cwd: TMP });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('not in the authorized set');
+    });
+
+    it('resolves in-root symlinks to the real target and enforces signatures on it', async () => {
+      const content = '#!/usr/bin/env python3\nprint("via-link")\n';
+      const realA = join(TMP, 'real-a.sh');
+      const link = join(TMP, 'swap-link.sh');
+      writeFileSync(realA, content);
+      chmodSync(realA, 0o755);
+      rmSync(link, { force: true });
+      symlinkSync(realA, link);
+
+      const good = createHash('sha256').update(content).digest('hex');
+      const layer = new LinuxArchExecutionLayer({ execRoot: TMP, authorizedSignatures: { 'real-a.sh': [good] } });
+      const res = await layer.execute({ commandLine: './swap-link.sh', cwd: TMP });
+      expect(res.status).toBe('success');
+      expect(res.stdout).toContain('via-link');
+    });
+
+    it('does not enforce signature when no authorized set is configured for that program', async () => {
+      const layer = new LinuxArchExecutionLayer({ execRoot: TMP, authorizedSignatures: { 'unrelated.sh': ['deadbeef'] } });
+      const res = await layer.execute({ commandLine: './swap-link.sh', cwd: TMP });
+      expect(res.status).toBe('success');
+      expect(res.stdout).toContain('via-link');
     });
   });
 });

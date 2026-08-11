@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import {
   bootNawat,
@@ -19,7 +19,7 @@ import {
   type Extension
 } from './src/index';
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 // أمنياً: يُربط محلياً فقط (127.0.0.1) افتراضياً؛ يمكن تجاوزه بـ NAWAT_HOST لأغراض تطويرية.
 const HOST = process.env.NAWAT_HOST || '127.0.0.1';
 // مفتاح API إلزامي لكل /api — يُولَّد عشوائياً عند غياب NAWAT_API_KEY ويُطبع عند الإقلاع.
@@ -495,12 +495,7 @@ app.post('/api/projects/scan', (req, res) => {
   audit('projects.scan', `root='${realRoot}'`);
 
   const byteChecksum = (buf: Uint8Array): string => {
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < buf.length; i++) {
-      hash ^= buf[i];
-      hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
-    }
-    return (hash >>> 0).toString(16).padStart(8, '0');
+    return createHash('sha256').update(buf).digest('hex');
   };
 
   let indexer: PersistentIndexer | undefined;

@@ -23,11 +23,11 @@ src/  (55 ملفاً TS · 4845 سطراً)
 │                    logic/ (9/334)
 └── system/        النظام: 7 ملفات / 143 سطراً + engine/ (2/164) + vfs/ (3/405)
 
-bin/nawat.ts (71) · server.ts (703) · tests/ (11 ملفات · 197 اختباراً)
+bin/nawat.ts (71) · server.ts (1121) · tests/ (13 ملفات · 226 اختباراً)
 ```
 
 **الحالة المثبتة اليوم (آخر تحقق):**
-- `bun install` ناجح · `tsc --noEmit` **نظيف** · `bun run build` **نظيف** (dist/server.cjs 67KB) · **197/197 اختباراً أخضر** (11 ملفات، ~1.4s).
+- `bun install` ناجح · `tsc --noEmit` **نظيف** · `bun run build` **نظيف** (dist/server.cjs 67KB) · **226/226 اختباراً أخضر** (13 ملفات، ~2.3s).
 
 ---
 
@@ -45,9 +45,9 @@ bin/nawat.ts (71) · server.ts (703) · tests/ (11 ملفات · 197 اختبا�
 | 8 | مرونة/ضغط | `stress.test.ts` (3) |
 | 9 | CLI `bin/nawat.ts` (boot/status/profiles) + خادم Express بواجهة لوحة تحكم RTL (`server.ts`) | `tsc`/`build` نظيفان |
 | 10 | `kernel.md` محدَّث للهيكل الجديد وسورس النواة مطابق (11/11 ملفاً) | تحقّق آلي |
-| 11 | **طبقة تنفيذ أرش** `LinuxArchExecutionLayer` — تنفيذ حقيقي `execFile` بلا shell ببوابات إلزامية: code-domain (قواعد أرش: `rm -rf`/`mkfs`/`dd`/`poweroff`/`sudo`/`pacman -R`…) → allowlist (70+ أداة) → quota (معدل/زمن/أخطاء) → جذر تنفيذ realpath (ضد هروب symlink خارج الشجرة) → ELF (توقيع + بت تنفيذ) / سكربتات shebang (المفسّر من allowlist) / رفض الثنائيات المجهولة والملفات غير العادية | `linux-arch-execution-layer.test.ts` (36) |
-| 12 | كشف الملفات المجهولة: shebang يكشف المفسّر واللغة (امتداد/نوع مجهولان) + الثنائيات المجهولة `bin/octet-stream` بدل تصنيفها نصاً | `system.test.ts` (18) |
-| 13 | **ماسح المشروع الخارجي** `scanProject` — عند فحص مجلد مشروع من الخارج يكشف: ملفات مخفية (نقطية + أسماء Unicode خفية) · قابلة للتنفيذ (ELF/skriptات shebang) · backdoor (setuid/setgid + غير-عادية) · روابط رمزية خارجة عن الشجرة (هروب) · مزروعة (غير مسجّلة) / معبث بها (checksum) / مفقودة مقابل `PersistentIndexer` — مدمج REST `/api/projects/scan` + تبويب لوحة | `project-scanner.test.ts` (6) |
+| 11 | **طبقة تنفيذ أرش** `LinuxArchExecutionLayer` — تنفيذ حقيقي `execFile` بلا shell ببوابات إلزامية: code-domain (قواعد أرش: `rm -rf`/`mkfs`/`dd`/`poweroff`/`sudo`/`pacman -R`…) → allowlist (70+ أداة) → quota (معدل/زمن/أخطاء) → جذر تنفيذ realpath (ضد هروب symlink خارج الشجرة) → ELF (توقيع + بت تنفيذ + **فحص عميق e_ident/e_type**) / سكربتات shebang (المفسّر من allowlist) / رفض الثنائيات المجهولة والملفات غير العادية + **إعادة تحقق TOCTOU قبل spawn + بصمات SHA-256 مخوّلة** | `linux-arch-execution-layer.test.ts` (55) |
+| 12 | كشف الملفات المجهولة: shebang يكشف المفسّر واللغة (امتداد/نوع مجهولان) + الثنائيات المجهولة `bin/octet-stream` بدل تصنيفها نصاً + `inspectElfHeader` (e_ident class/endian/version + e_type؛ يرحب بـET_EXEC/ET_DYN فقط) | `system.test.ts` (23) |
+| 13 | **ماسح المشروع الخارجي** `scanProject` — عند فحص مجلد مشروع من الخارج يكشف: ملفات مخفية (نقطية + أسماء Unicode خفية) · قابلة للتنفيذ (ELF/skriptات shebang) · backdoor (setuid/setgid + غير-عادية) · روابط رمزية خارجة عن الشجرة (هروب) · مزروعة (غير مسجّلة) / معبث بها (checksum SHA-256) / مفقودة مقابل `PersistentIndexer` — مدمج REST `/api/projects/scan` + تبويب لوحة | `project-scanner.test.ts` (6) |
 
 ---
 
@@ -55,13 +55,13 @@ bin/nawat.ts (71) · server.ts (703) · tests/ (11 ملفات · 197 اختبا�
 
 | المنطقة | الملفات | درجة المراجعة |
 |---|---|---|
-| أجسام ملفات الاختبار | `tests/*.test.ts` (11) | راجعت الأعداد فقط، لا تفاصيل الحالات |
+| أجسام ملفات الاختبار | `tests/*.test.ts` (13) | راجعت الأعداد فقط، لا تفاصيل الحالات — عدا `e2e-server`/`nawat-cli` (مكتوبان هذه الجلسة) |
 | منطق التقطير | `logic/program-distiller.ts` (47) | لم يُراجع بالكامل |
 | بروفايلات النطاقات | `logic/domains/code/reasoning/scraping-domain.ts` (3) | لم تُراجع (الـ index/forge/compiler/retro نعم) |
-| الفهرسة الدائمة | `system/vfs/persistent-indexer.ts` (255) + `file-type-detector.ts` (85) | indexer: روجعت بالكامل — ثغرة symlink غير متتبَّعة (سجّلت في §5-طـ) · detector: يُعاد قراءته عند توحيد 512 بايت (§5-ض) |
+| الفهرسة الدائمة | `system/vfs/persistent-indexer.ts` (325) + `file-type-detector.ts` (85) | indexer: روجعت بالكامل — حفظ/تحميل ذرّي حقيقي + SHA-256 (ص/ف تمّا) · detector: قراءة موحّدة 512 بايت + `inspectElfHeader` (ض/ش تمّا) |
 | اختبار الضغط | `stress.test.ts` (143) | لم يُراجع محتواه |
-| تشغيل فعلي للخادم | `server.ts` | شغّلته واختبرت `/api/arch/*` (curl): allowed/blocked/audit ✓ — بقية النقاط لم تُختبر كلها بعد |
-| تشغيل فعلي للـCLI | `bin/nawat.ts` | لم أشغّله (الـ help/profiles/boot غير مُختبَر فعلياً) |
+| تشغيل فعلي للخادم | `server.ts` | ✅ **تم آلياً** — `e2e-server.test.ts` (15) يُقلع الخادم في عملية فرعية ويختبر HTTP: مصادقة/أوامر/أرش/هيرمس/فحص/تدقيق |
+| تشغيل فعلي للـCLI | `bin/nawat.ts` | ✅ **تم آلياً** — `nawat-cli.test.ts` (4): help/--help/-h/profiles/status |
 | LLM حقيقي | `OllamaBackend` | لا يوجد نموذج محلي؛ الاختبار الحقيقي معلّق |
 
 ---
@@ -98,17 +98,17 @@ bin/nawat.ts (71) · server.ts (703) · tests/ (11 ملفات · 197 اختبا�
 | ط | `@google/genai` في dependencies وغير مستخدم إطلاقاً | `package.json:28` | حذفه (المشروع محلي بلا سحابة) |
 | ي | نقاط REST تسمح بتسجيل أوامر/إضافات بلا مصادقة على `0.0.0.0` — **وأصبح أخطر**: `/api/arch/execute` ينفّذ أوامر نظام (مقيّدة بالبوابات لكنها منفذة فعلاً) | `server.ts:180,242` + `/api/arch/execute` | فتحها محلياً فقط (`127.0.0.1`) أو إضافة مفتاح/تقييد + تسجيل تدقيق إلزامي |
 | ك | `estimateTokens` تقدير خام (طول/4) | `agent-kernel/intelligence/context-model.ts:43` | عدّاد توكنات معياري قابل للحقن |
-| ل | لا اختبار آلي لـ`server.ts`/`bin/nawat.ts` | `tests/` | اختبارات تكاملية (boot → serve → learn → save/load). جرّبت `/api/arch/*` يدوياً (curl) ✓ |
+| ل | ~~لا اختبار آلي لـ`server.ts`/`bin/nawat.ts`~~ **✅ عولج** — اختبارات تكاملية سوداء تشغّل الخادم والـCLI في عمليات فرعية | `tests/e2e-server.test.ts` + `tests/nawat-cli.test.ts` | **تم** — E2E: 401 بلا مفتاح/بمفتاح خاطئ · 200 بالمفتاح المثبّت · أمر echo ✓ · arch allowed + هروب مطلق blocked · hermes serve/train ✓ · chat completions (شكل OpenAI) ✓ · scan خارج الجذر 403 / داخل الجذر (hidden/executable/backdoor/outside_link/unregistered/tampered) ✓ · audit يحتوي projects.scan/denied/arch.execute ✓ — CLI: help/--help/-h/profiles/status (exit 0) ✓ |
 | م | `ExecutionSandboxEngine.execute` لا يزال رسالة جاهزة | `system/engine/execution-sandbox.ts:76-97` | إعادة توجيهه إلى `LinuxArchExecutionLayer` (التنفيذ الفعلي أصبح فيها) |
-| ن | **TOCTOU** بين `inspectPath` و`execFile`: يُفحص المسار ثم يُنفَّذ بمسار قد يتغير | `linux-arch-execution-layer.ts` | تنفيذ قائم على الواصف `openat`/`execveat` (محدود في Node) أو إعادة فحص `lstat` بعد التنفيذ + تسجيل تحذير |
+| ن | ~~**TOCTOU** بين `inspectPath` و`execFile`: يُفحص المسار ثم يُنفَّذ بمسار قد يتغير~~ **✅ عولج** — `postCheckProgram`/`postCheckBinary` تُستدعى فوراً قبل spawn: إعادة `realpathSync` (تبديل symlink/استبدال مسار)، إعادة `stat` (اختفاء/نوع/setuid طارئ)، وفحص بصمة SHA-256 إذا وُجد `authorizedSignatures` | `linux-arch-execution-layer.ts:460-519` | **تم** — 3 اختبارات (بصمة مخوّلة تنفّذ ✓ · محتوى مُبدَّل على القرص محجوب ESECURITY ✓ · symlink داخل الجذر يُنفَّذ ببصمة الهدف الحقيقي ✓) |
 | س | ~~لا عزل نظامي في التنفيذ الأرشي~~ **✅ عولج** — عزل بجذر تنفيذ إلزامي (فجوة س): `enforceExecRoot` افتراضي `true` — root = `execRoot`/cwd/جذر العمل؛ cwd خارج الجذر → رفض؛ أهداف مطلقة خارج الجذر (`cat /etc/hostname`، `touch /etc/x`) → `ESECURITY`؛ بلا cwd يُنفَّذ داخل الجذر؛ `parseCommand` يعالج المطلق كـ target لا subCommand | `linux-arch-execution-layer.ts` + `server.ts` (execRoot=project dir) | **تم** — 5 اختبارات (pwd داخل الجذر · cwd خارج مرفوض · /etc مرفوض حتى للمعدوم · نسبي يعمل) · **180/180** · E2E: cat /etc/hostname→denied ✓ |
-| ش | **توقيع ELF سطحي** — يُقبل بأربعة بايتات magic فقط دون فحص `e_ident`/`e_type` ودون موافقة توقيع مخوّل | `linux-arch-execution-layer.ts` + `file-type-detector.ts` | فحص `e_type` (executable/shared) + قائمة توقيعات مخوّلة |
-| ص | **`syncToDisk()` في `PersistentIndexer` دمية (no-op)** — الفهرس لا يُحفظ فعلياً؛ يفقد خط الأساس عند إعادة التشغيل فلا يمكن تتبّع المزروع/المعبث عبر الجلسات | `system/vfs/persistent-indexer.ts:237-243` | حفظ snapshot ذرّي حقيقي (JSON+checksum) وتحميله عند الإقلاع؛ **الماسح يحتاج خط أساس دائماً ليُقارن به** |
-| ض | **`file-type-detector` يقرأ 64 بايتاً بينما طبقة الأرش تقرأ 512** — تغطية قراءة غير موحّدة (كشف متناقض محتمل للثنائيات التي magic بعد 64) | `system/vfs/file-type-detector.ts` + `linux-arch-execution-layer.ts` | توحيد حجم القراءة (512) في الجهتين |
+| ش | ~~**توقيع ELF سطحي** — يُقبل بأربعة بايتات magic فقط دون فحص `e_ident`/`e_type` ودون موافقة توقيع مخوّل~~ **✅ عولج** — `inspectElfHeader` يقرأ e_ident (class 32/64 · endian · version) + e_type ويرحب بـET_EXEC/ET_DYN فقط (ET_REL/CORE → data غير قابلة للتنفيذ) + `authorizedSignatures` (SHA-256) | `file-type-detector.ts` + `linux-arch-execution-layer.ts` | **تم** — 3 اختبارات (EXEC 64-bit little ✓ · DYN 32-bit big ✓ · ET_REL محجوب ببصمة ET_REL ✓ + طبقة الأرش تحجب ELF غير قابل للتنفيذ) |
+| ص | ~~**`syncToDisk()` في `PersistentIndexer` دمية (no-op)** — الفهرس لا يُحفظ فعلياً؛ يفقد خط الأساس عند إعادة التشغيل فلا يمكن تتبّع المزروع/المعبث عبر الجلسات~~ **✅ عولج** — حفظ ذرّي حقيقي (JSON + tmp + rename إلى `.nawat-index.json`) مع غلاف بصمة SHA-256 + `loadFromDisk` يتحقق (`EINTEGRITY` عند الفساد) ويعيد بناء الفهرس والعداد | `system/vfs/persistent-indexer.ts:267-312` | **تم** — 2 اختباران (حفظ/تحميل عبر الجلسات ✓ · snapshot معبث → EINTEGRITY ✓) |
+| ض | ~~**`file-type-detector` يقرأ 64 بايتاً بينما طبقة الأرش تقرأ 512** — تغطية قراءة غير موحّدة (كشف متناقض محتمل للثنائيات التي magic بعد 64)~~ **✅ عولج** — قراءة موحّدة 512 بايت في الجهتين (string وUint8Array) | `system/vfs/file-type-detector.ts` | **تم** — كشف ELF/shebang على 512 بايت متطابق بين الطبقتين |
 | طـ | **`PersistentIndexer` يسجّل `symlink` كعقدة دون تتبّع هدفها** — لا فحص هروب/إعادة توجيه داخل الفهرس (الماسح يعوّضه بـ`outside_link` لكن الفهرس نفسه يبقى ساذجاً) | `system/vfs/persistent-indexer.ts:6` | تخزين `linkTarget` + فحصه عند التسجيل |
 | ع | ~~لا رفض صريح لـ`setuid/setgid` في `LinuxArchExecutionLayer`~~ **✅ عولج** — رفض `ESECURITY` عند اكتشاف `(mode & 0o6000)` في `inspectPath` قبل أي تنفيذ | `linux-arch-execution-layer.ts` | **تم** — 3 اختبارات (SUID/SGID مرفوضان + عادي يعمل) · E2E curl: `denied ESECURITY ... 0o104755` ✓ |
 | غ | ~~`/api/projects/scan` و`/api/arch/*` بلا مصادقة على `0.0.0.0`~~ **✅ عولج** — ربط `127.0.0.1` افتراضياً (`NAWAT_HOST`) + مفتاح `X-API-Key` إلزامي لكل `/api` (يُولَّد تلقائياً أو `NAWAT_API_KEY`) + تقييد جذور الفحص بجذر العمل (`NAWAT_SCAN_ROOTS`) + تدقيق `[AUDIT]` + `/api/audit` | `server.ts` | **تم** — E2E: بلا مفتاح 401 · خارج الجذر 403 · داخل الجذر يعمل · تنفيذ+تدقيق ✓ |
-| ف | **checksum الماسح FNV-1a غير تشفيري** — كشف العبث مضمون الحوادث (collision) لا مضمون التشفير | `system/vfs/project-scanner.ts` | ترقية إلى SHA-256 (`node:crypto`) مع خط أساس مُوقّع |
+| ف | ~~**checksum الماسح FNV-1a غير تشفيري** — كشف العبث مضمون الحوادث (collision) لا مضمون التشفير~~ **✅ عولج** — ترقية إلى SHA-256 (`node:crypto`) في الماسح **والفهرس** (`computeChecksum`) **وخادم `/api/projects/scan`** — خوارزمية واحدة للبصمات | `system/vfs/project-scanner.ts` + `persistent-indexer.ts` + `server.ts:497` | **تم** — `project-scanner.test.ts` يستخدم sha256 لخط الأساس (لا false positives) · E2E: baseline معبث → `tampered` ✓ |
 
 ---
 
@@ -116,6 +116,7 @@ bin/nawat.ts (71) · server.ts (703) · tests/ (11 ملفات · 197 اختبا�
 
 | التاريخ | ما تحقق | الاختبارات |
 |---|---|---|
+| اليوم | **تنفيذ البنود الأمنية الأربعة ذات الأولوية (ص·ف·ن·ش·ل)** — ① خط أساس دائم حقيقي: `syncToDisk` ذرّي (tmp+rename) + `loadFromDisk` مع بصمة غلاف SHA-256 (`EINTEGRITY`) · ② توحيد SHA-256 في الماسح والفهرس **والخادم** (FNV-1a سابقاً في `server.ts` كان سيولّد false positives) · ③ إعادة تحقق TOCTOU فورياً قبل spawn (`postCheckProgram`/`postCheckBinary`: realpath + stat + setuid + `authorizedSignatures` SHA-256) · ④ فحص ELF عميق `inspectElfHeader` (e_ident class/endian/version + e_type؛ ET_REL/CORE محجوبة) + قراءة موحّدة 512 بايت + إصلاح `executable:false` الثابت في فرع ET_REL · ⑤ **E2E آلي أسود**: `e2e-server.test.ts` (15) يُقلع `server.ts` في عملية فرعية + `nawat-cli.test.ts` (4) | `tsc` نظيف · `build` نظيف · **226/226** · E2E: 401/200/403 · scan (hidden/executable/backdoor/outside_link/unregistered/tampered) · arch allowed+blocked · hermes · chat OpenAI shape · audit ✓ · CLI help/profiles/status ✓ |
 | اليوم | مراجعة التحديثات · تحديث `kernel.md` للهيكل الجديد · توثيق الحالة | `tsc` نظيف · `build` نظيف · **127/127** |
 | اليوم | طبقة `LinuxArchExecutionLayer` (تنفيذ حقيقي + بوابات أرش) · دعم الملفات المجهولة (shebang/ثنائي مجهول) · تحصين الملفات المخفية (جذر realpath · Unicode · devices · dotfiles) | `tsc` نظيف · **166/166** |
 | اليوم | دمج الطبقة في `server.ts`: `/api/arch/execute` + `/api/arch/history` + `/api/arch/status` + تبويب لوحة (RTL) — اختُبرت E2E بالـcurl | `tsc` نظيف · `build` نظيف · curl: allowed/blocked/audit ✓ |

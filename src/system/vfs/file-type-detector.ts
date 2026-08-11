@@ -6,6 +6,43 @@ export interface FileTypeResult {
   interpreter?: string;
 }
 
+export interface ElfHeaderInfo {
+  elfClass: 32 | 64;
+  endian: 'little' | 'big';
+  version: number;
+  eType: number;
+  eTypeName: string;
+  isExecutable: boolean;
+}
+
+/**
+ * يفحص رأس ELF بعمق (فجوة ش): يتحقق من مصفوفة e_ident (الفئة 32/64، ترتيب البايتات، إصدار ELF)
+ * وحقل e_type — يقرّ فقط بـ ET_EXEC (2) و ET_DYN (3) كملفات قابلة للتنفيذ (PIE)،
+ * ويرفض ET_REL (كائن ربط) و ET_CORE و ET_NONE والرؤوس المبتورة.
+ */
+export function inspectElfHeader(data: Uint8Array): ElfHeaderInfo | null {
+  const b = data;
+  if (b.length < 16) return null;
+  if (!(b[0] === 0x7f && b[1] === 0x45 && b[2] === 0x4c && b[3] === 0x46)) return null;
+
+  const elfClass = b[4] === 2 ? 64 : b[4] === 1 ? 32 : 0;
+  const endian = b[5] === 1 ? 'little' : b[5] === 2 ? 'big' : null;
+  if (elfClass === 0 || !endian) return null;
+  if (b.length < 18) return null;
+
+  const eType = endian === 'little' ? b[16] | (b[17] << 8) : (b[16] << 8) | b[17];
+  const eTypeNames: Record<number, string> = { 0: 'ET_NONE', 1: 'ET_REL', 2: 'ET_EXEC', 3: 'ET_DYN', 4: 'ET_CORE' };
+
+  return {
+    elfClass,
+    endian,
+    version: b[6],
+    eType,
+    eTypeName: eTypeNames[eType] ?? `ET_${eType}`,
+    isExecutable: eType === 2 || eType === 3
+  };
+}
+
 const SHEBANG_EXTS: Record<string, { ext: string; mime: string }> = {
   python3: { ext: 'py', mime: 'text/x-python' },
   python: { ext: 'py', mime: 'text/x-python' },
@@ -38,9 +75,9 @@ export function detectFileType(data: Uint8Array | string): FileTypeResult {
   let bytes: Uint8Array;
   if (typeof data === 'string') {
     const encoder = new TextEncoder();
-    bytes = encoder.encode(data.substring(0, 64));
+    bytes = encoder.encode(data.substring(0, 512));
   } else {
-    bytes = data.subarray(0, 64);
+    bytes = data.subarray(0, 512);
   }
 
   if (!bytes || bytes.length === 0) {
@@ -81,8 +118,12 @@ export function detectFileType(data: Uint8Array | string): FileTypeResult {
     return { ext: 'zip', mime: 'application/zip', isExecutable: false, confidence: 'magic_bytes' };
   }
 
-  // 6. ELF Executable (Linux): 7F 45 4C 46 (.ELF)
+  // 6. ELF Executable (Linux): 7F 45 4C 46 (.ELF) — تحقق عميق من الهيكل عند اكتمال الرأس
   if (matchHex([0x7F, 0x45, 0x4C, 0x46])) {
+    const info = inspectElfHeader(bytes);
+    if (info && !info.isExecutable) {
+      return { ext: 'bin', mime: 'application/octet-stream', isExecutable: false, confidence: 'magic_bytes' };
+    }
     return { ext: 'elf', mime: 'application/x-executable', isExecutable: true, confidence: 'magic_bytes' };
   }
 
