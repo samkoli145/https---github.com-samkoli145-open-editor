@@ -359,6 +359,7 @@ app.post('/api/arch/execute', async (req, res) => {
     timeoutMs: timeoutMs != null ? Number(timeoutMs) : undefined,
     agentId: typeof agentId === 'string' && agentId ? agentId : undefined
   });
+  audit('arch.execute', `command='${commandLine}' verdict=${result.verdict} status=${result.status}`);
   res.json({
     command: result.command,
     status: result.status,
@@ -384,6 +385,10 @@ app.get('/api/arch/status', (_req, res) => {
   res.json({ enabled: true, defaultAgentId: 'web-arch', syscallCount: usage.syscallCount, errorCount: usage.errorCount });
 });
 
+app.get('/api/audit', (_req, res) => {
+  res.json({ count: auditLog.length, records: auditLog.slice().reverse() });
+});
+
 // Project Scanner — فحص مجلد مشروع خارجي: مخفي/قابل تنفيذ/backdoor/هروب/مزروع/معبث
 app.post('/api/projects/scan', (req, res) => {
   const { root, registered } = req.body ?? {};
@@ -396,6 +401,15 @@ app.post('/api/projects/scan', (req, res) => {
   } catch {
     return res.status(400).json({ error: `root does not exist: ${root}` });
   }
+
+  if (!isAllowedScanRoot(realRoot)) {
+    audit('projects.scan.denied', `root='${realRoot}' (outside allowed roots)`);
+    return res.status(403).json({
+      error: `E403: root is not within allowed scan roots: ${SCAN_ROOTS.join(', ')}`
+    });
+  }
+
+  audit('projects.scan', `root='${realRoot}'`);
 
   const byteChecksum = (buf: Uint8Array): string => {
     let hash = 0x811c9dc5;
@@ -677,7 +691,7 @@ app.get('/', (_req, res) => {
         <p class="text-xs text-slate-400">فحص مجلد مشروع من الخارج: ملفات مخفية (نقطية/Unicode) · قابلة للتنفيذ · setuid/backdoor · روابط خارجة عن الشجرة · مزروعة/معبث بها/مفقودة مقابل الفهرس.</p>
         <div>
           <label class="block text-xs font-medium text-slate-300 mb-1">مسار المشروع المطلق (root)</label>
-          <input type="text" id="scan-root" value="/tmp/opencode/extproj" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-white" />
+          <input type="text" id="scan-root" value="${process.cwd()}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-white" />
         </div>
         <div>
           <label class="block text-xs font-medium text-slate-300 mb-1">قاعدة خط الأساس (registered: مسارات أو {path, checksum} مفصولة بفاصلة — اختياري)</label>
@@ -693,6 +707,14 @@ app.get('/', (_req, res) => {
   </main>
 
   <script>
+    // يُحقن مفتاح الـ API محلياً في اللوحة (اللوحة لا تصل إليها إلا محلياً) لكل fetch تلقائياً
+    const __nawatFetch = window.fetch;
+    window.fetch = function (url, opts) {
+      return __nawatFetch(url, Object.assign({}, opts, {
+        headers: Object.assign({ 'X-API-Key': '${API_KEY}' }, (opts && opts.headers) || {})
+      }));
+    };
+
     let currentTab = 'commands';
     let commandsData = [];
 
@@ -1009,8 +1031,10 @@ app.get('/', (_req, res) => {
 </html>`);
 });
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Nawat Kernel] Server running on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`[Nawat Kernel] Server running on http://${HOST}:${PORT}`);
+    console.log(`[Nawat Kernel] API key: ${API_KEY}  (set NAWAT_API_KEY to pin it)`);
+    console.log(`[Nawat Kernel] Allowed scan roots: ${SCAN_ROOTS.join(', ')}`);
   });
 }
 

@@ -103,7 +103,7 @@ bin/nawat.ts (71) · server.ts (703) · tests/ (10 ملفات · 166 اختبا�
 | ض | **`file-type-detector` يقرأ 64 بايتاً بينما طبقة الأرش تقرأ 512** — تغطية قراءة غير موحّدة (كشف متناقض محتمل للثنائيات التي magic بعد 64) | `system/vfs/file-type-detector.ts` + `linux-arch-execution-layer.ts` | توحيد حجم القراءة (512) في الجهتين |
 | طـ | **`PersistentIndexer` يسجّل `symlink` كعقدة دون تتبّع هدفها** — لا فحص هروب/إعادة توجيه داخل الفهرس (الماسح يعوّضه بـ`outside_link` لكن الفهرس نفسه يبقى ساذجاً) | `system/vfs/persistent-indexer.ts:6` | تخزين `linkTarget` + فحصه عند التسجيل |
 | ع | **لا رفض صريح لـ`setuid/setgid` في `LinuxArchExecutionLayer`** — تنفيذ برنامج ببت 4/2 من مشروع = تصعيد صلاحيات محتمل | `linux-arch-execution-layer.ts` | رفض `ESECURITY` عند اكتشاف `(mode & 0o6000)` |
-| غ | **`/api/projects/scan` و`/api/arch/*` بلا مصادقة على `0.0.0.0`** — الماسح يقرأ أي مسار مطلق على الجهاز | `server.ts` | ربط `127.0.0.1` أو مفتاح/تقييد + الحد من الجذور المسموح فحصها |
+| غ | ~~`/api/projects/scan` و`/api/arch/*` بلا مصادقة على `0.0.0.0`~~ **✅ عولج** — ربط `127.0.0.1` افتراضياً (`NAWAT_HOST`) + مفتاح `X-API-Key` إلزامي لكل `/api` (يُولَّد تلقائياً أو `NAWAT_API_KEY`) + تقييد جذور الفحص بجذر العمل (`NAWAT_SCAN_ROOTS`) + تدقيق `[AUDIT]` + `/api/audit` | `server.ts` | **تم** — E2E: بلا مفتاح 401 · خارج الجذر 403 · داخل الجذر يعمل · تنفيذ+تدقيق ✓ |
 | ف | **checksum الماسح FNV-1a غير تشفيري** — كشف العبث مضمون الحوادث (collision) لا مضمون التشفير | `system/vfs/project-scanner.ts` | ترقية إلى SHA-256 (`node:crypto`) مع خط أساس مُوقّع |
 
 ---
