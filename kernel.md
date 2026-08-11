@@ -79,7 +79,7 @@
 | CLI + خادم (bin/nawat.ts + server.ts) | ✅ تشغيل | `nawat boot/status/profiles` · REST (health، kernel status) |
 | نماذج محلية (Ollama) | 🟡 واجهة جاهزة | `OllamaBackend` موجود؛ الاختبار الحقيقي معلّق حتى وجود نموذج |
 | كرة الثلج — تعلم من مصادر متعددة | ⏳ قادمة | `snowball.ts` عند التنفيذ |
-| واجهة فاتحة 100% | ⏳ مرحلة الواجهة | لا أسود/داكن |
+| واجهة فاتحة 100% | ✅ معتمدة (نسخة archive) | لوحة `Web OS Station` (KDE Breeze/Dolphin) فاتحة slate-100 · قائمة برامج · ساعة · زر إيقاف · مسارات |
 
 ---
 
@@ -150,8 +150,8 @@ kernel-project/
 | **أنواع أدوات الحلقة** | `ToolRegistry` + `LoopToolSet` | أي أداة تُسجَّل تُقاس تلقائياً (latency/confidence) |
 | **نماذج LLM** | `ILLMBackend` (Ollama أساسي) | llama.cpp / LM Studio / أي نهاية تلتزم الواجهة |
 | **العقل/المنطق** | `InferenceEngine` + `LogicDNA` | نوى مجالات جديدة عبر `kernel-forge` + الحصاد `retro-extractor`/`program-distiller` |
-| **تنفيذ أرش (ELF/أوامر)** | `LinuxArchExecutionLayer` — بوابات (code-domain → allowlist → quota → جذر تنفيذ → فحص ELF عميق e_ident/e_type → إعادة تحقق TOCTOU قبل spawn → بصمات SHA-256 مخوّلة) | عزل نظامي أعمق (bubblewrap/Landlock) · قوائم سماح لكل نمط · ربطه بـ`ToolRegistry`/`HermesKernel` |
-| **فحص مشروع خارجي** | `scanProject` — مخفي (نقطية/Unicode) · قابل تنفيذ · setuid/backdoor · هروب روابط · مزروع/معبث/مفقود مقابل `PersistentIndexer` (SHA-256) | خط أساس دائم (مُخزَّن ذرّياً `.nawat-index.json` + غلاف SHA-256) · عزل أثناء الفحص · جداول `dist`/`node_modules` مخصّصة لكل مشروع |
+| **تنفيذ أرش (ELF/أوامر)** | `LinuxArchExecutionLayer` — بوابات (code-domain → allowlist → quota → جذر تنفيذ → ELF/shebang) | عزل نظامي أعمق (bubblewrap/Landlock) · قوائم سماح لكل نمط · توقيعات ELF معمّقة (e_ident/e_type) · ربطه بـ`ToolRegistry`/`HermesKernel` |
+| **فحص مشروع خارجي** | `scanProject` — مخفي (نقطية/Unicode) · قابل تنفيذ · setuid/backdoor · هروب روابط · مزروع/معبث/مفقود مقابل `PersistentIndexer` | خط أساس دائم (مخزن SHA-256) · عزل أثناء الفحص · جداول `dist`/`node_modules` مخصّصة لكل مشروع |
 | **VFS/النظام** | `system/vfs` + `engine/base-engine` + `execution-sandbox` | مخزن قرص حقيقي + صندوق عزل مضيّق دون تغيير النواة |
 | **إضافات/وحدات** | `ExtensionManager` | تحميل وحدات معيارية فوق نواة ثابتة (نموذج GKI) |
 | **كرة الثلج** | مقاييس/معاملات قابلة للجمع | مصادر متعددة تُجمَّع في كرة تنمو (`snowball.ts`) |
@@ -165,11 +165,11 @@ kernel-project/
 - ✅ تنفيذ أرش حقيقي (`LinuxArchExecutionLayer`) + ماسح مشروع خارجي (`scanProject`) — يكتشف الملفات المخفية (نقطية/Unicode)، القابل للتنفيذ، setuid، هروب الروابط، المزروع/المعبث/المفقود مقابل الفهرس.
 - ✅ النواة تعمل بلا LLM مستمر (حلقة رمزية حتمية) + تعليم يغيّر سلوكها فعلياً عبر هيرمس.
 - ✅ موازنة الـ10ms حاضرة: `signalingLatencyMs` في المقاييس + `LRUCache` بمعامل TTL.
-- ✅ CLI (`bin/nawat.ts`) + خادم Express (`server.ts`) يعملان فوق النواة.
-- ⏳ المتبقي: اختبار Ollama حقيقي عند توفر نموذج · كرة الثلج · واجهة فاتحة · محرر كامل.
+- ✅ CLI (`bin/nawat.ts`) + خادم Express (`server.ts`) يعملان فوق النواة — **واجهة فاتحة Web OS Station معتمدة** + E2E آلي (mirror + blackbox + CLI).
+- ⏳ المتبقي: اختبار Ollama حقيقي عند توفر نموذج · كرة الثلج · محرر كامل.
 - ✅ ربط حقيقي للنواة العليا/هيرمس في المستضيف: `HermesKernel` (serve/learn) + نواة وكيل عبر `LLMCore`/`ToolRegistry`/`SessionManager` — بدل الأشباح السابقة (§5-أ في `PLAN.md`).
 - ✅ دمج إصلاحات الطرف الخارجي فوق تحصيناتنا: الوعود غير المعالجة (`donePromise.catch`+`isCanceled`) · `executeSyscall` حقيقي (طابور + أوامر + `syscall:executed`) · جسر Tool↔Command (`tool.*`) · جلسات↔حصص (`EQUOTA_EXCEEDED`) · VFS مدعوم بالتخزين الآمن · `/api/v1/chat/completions` + `/api/hermes/serve` + `/api/hermes/train` + حدث `arch:command_executed` — مع الإبقاء على الحماية (غ/ع/س) والتدقيق.
-- ⚠️ فجوات أمنية مسجّلة (تتبع في `PLAN.md` §5): عولج **غ** (ربط 127.0.0.1 + مفتاح API + تقييد جذور الفحص + تدقيق) و**ع** (رفض setuid/setgid) و**س** (عزل بجذر تنفيذ إلزامي) و**ن** (TOCTOU) و**ش** (فحص ELF عميق) و**ص/ف** (خط أساس دائم SHA-256) و**ل** (اختبار E2E آلي للخادم والـCLI) — المتبقي: ض (تم جزئياً) وطـ وو/م/ز/ح/ي/ك.
+- ⚠️ فجوات أمنية مسجّلة (تتبع في `PLAN.md` §5): عولج **غ** (مفتاح API + جذور فحص + تدقيق؛ أعدنا `127.0.0.1` الافتراضي بعدما أعادته نسخة archive `0.0.0.0`) و**ع** (رفض setuid/setgid) و**س** (عزل بجذر تنفيذ إلزامي) و**ن** (TOCTOU) و**ش** (فحص ELF عميق) و**ص/ف** (خط أساس دائم SHA-256) و**ل** (E2E آلي) و**ض** (قراءة موحّدة 512) — المتبقي: طـ وو/م/ز/ح/ي/ك.
 - 📋 الحالة التفصيلية (ما تم · ما لم يُراجع · المتبقي · التحسينات) في **`PLAN.md`**.
 
 ---

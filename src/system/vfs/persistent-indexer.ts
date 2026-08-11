@@ -1,10 +1,10 @@
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { Result, ok, err } from '../../kernel/core/result';
 import { DisposableStore } from '../../kernel/core/disposable';
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { sanitizePath, SanitizedPath } from './path-sanitizer';
-import { detectFileType, FileTypeResult } from './file-type-detector';
+import { detectFileType } from './file-type-detector';
 
 export type FileNodeType = 'file' | 'directory' | 'symlink';
 
@@ -22,6 +22,10 @@ export interface VFSFileIndexEntry {
   updatedAt: number;
 }
 
+export function computeSha256(data: Uint8Array | string): string {
+  return createHash('sha256').update(data).digest('hex');
+}
+
 /**
  * Persistent Indexer that tracks VFS file metadata with POSIX compliance (mode, uid, gid, inode),
  * supports fast search & filtering, and handles safe debounced disk sync & teardown.
@@ -33,27 +37,19 @@ export class PersistentIndexer {
   private isDisposed = false;
   private inodeCounter = 1000;
 
-  constructor(public readonly rootDir = '/vfs') {}
-
-  /** بصمة SHA-256 تشفيرية للمحتوى — نفس الخوارزمية التي يستخدمها ماسح المشروع لمطابقة بصمات النواة. */
-  public static computeChecksum(content: string | Uint8Array): string {
-    const bytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
-    return createHash('sha256').update(bytes).digest('hex');
+  constructor(
+    public readonly rootDir = '/vfs',
+    public readonly indexPath?: string
+  ) {
+    const target = this.snapshotPath();
+    if (target && existsSync(target)) {
+      this.loadFromDisk();
+    }
   }
 
-  private snapshotFile(): string {
-    return join(this.rootDir, '.nawat-index.json');
-  }
-
-  private serialize(): { version: number; entries: VFSFileIndexEntry[]; checksum: string; timestamp: number } {
-    const entries = Array.from(this.index.values());
-    const body = JSON.stringify(entries);
-    return {
-      version: 1,
-      entries,
-      checksum: createHash('sha256').update(body).digest('hex'),
-      timestamp: Date.now()
-    };
+  /** مسار snapshot خط الأساس: indexPath صريح، وإلا `.nawat-index.json` تحت الجذر. */
+  private snapshotPath(targetPath?: string): string | undefined {
+    return targetPath ?? this.indexPath ?? (this.rootDir ? join(this.rootDir, '.nawat-index.json') : undefined);
   }
 
   public registerFile(
@@ -77,7 +73,7 @@ export class PersistentIndexer {
     const safePath = pathRes.value;
     const fileType = detectFileType(content);
     const size = typeof content === 'string' ? new TextEncoder().encode(content).length : content.length;
-    const finalChecksum = checksum ?? PersistentIndexer.computeChecksum(content);
+    const finalChecksum = checksum ?? computeSha256(content);
 
     // Auto-promote executable permissions if magic bytes indicate ELF/PE/Script binary
     const isExe = fileType.isExecutable || (mode & 0o111) !== 0;
@@ -260,61 +256,77 @@ export class PersistentIndexer {
   }
 
   /**
-   * حفظ ذرّي حقيقي للفهرس إلى `.nawat-index.json` تحت الجذر (فجوة ص):
-   * كتابة إلى ملف مؤقت ثم rename ذرّي، مع غلاف يحمل بصمة SHA-256 للمحتوى
-   * لاكتشاف الفساد/العبث عند التحميل. يُستدعى دورياً (debounce 100ms) وعند التخلي.
+   * حفظ ذرّي حقيقي لخط الأساس إلى `.nawat-index.json` (فجوة ص): كتابة إلى ملف مؤقت
+   * ثم rename ذرّي، مع غلاف يحمل بصمة SHA-256 للمحتوى لاكتشاف الفساد/العبث عند التحميل.
    */
-  public syncToDisk(): void {
+  public syncToDisk(targetPath?: string): Result<boolean, Error> {
     if (this.syncTimer) {
       clearTimeout(this.syncTimer);
       this.syncTimer = null;
     }
+    const destination = this.snapshotPath(targetPath);
+    if (!destination) {
+      return ok(false);
+    }
     try {
-      mkdirSync(this.rootDir, { recursive: true });
-      const snapshot = this.serialize();
-      const target = this.snapshotFile();
-      const tmp = `${target}.tmp`;
-      writeFileSync(tmp, JSON.stringify(snapshot, null, 2), 'utf8');
-      renameSync(tmp, target);
-    } catch {
-      // حفظ احتياطي بأفضل جهد — الفهرس يبقى في الذاكرة حتى الإقلاع التالي
+      const entries = Array.from(this.index.entries());
+      const body = JSON.stringify(entries);
+      const snapshot = {
+        version: 1,
+        entries,
+        checksum: computeSha256(body),
+        timestamp: Date.now()
+      };
+      mkdirSync(dirname(destination), { recursive: true });
+      const tmp = `${destination}.tmp`;
+      writeFileSync(tmp, JSON.stringify(snapshot, null, 2), 'utf-8');
+      renameSync(tmp, destination);
+      return ok(true);
+    } catch (e: any) {
+      return err(e instanceof Error ? e : new Error(String(e)));
     }
   }
 
   /**
-   * تحميل خط الأساس الدائم من القرص (فجوة ص): يتحقق من بصمة الغلاف SHA-256
+   * تحميل خط الأساس من القرص (فجوة ص): يتحقق من بصمة الغلاف SHA-256
    * (يرفض `EINTEGRITY` عند الفساد/العبث) ويعيد بناء الفهرس والعداد.
    */
-  public loadFromDisk(): Result<number, Error> {
-    const target = this.snapshotFile();
-    if (!existsSync(target)) return ok(0);
+  public loadFromDisk(targetPath?: string): Result<number, Error> {
+    const source = this.snapshotPath(targetPath);
+    if (!source || !existsSync(source)) {
+      return err(new Error(`ENOENT: index path '${source ?? '(none)'}' does not exist`));
+    }
     try {
-      const raw = readFileSync(target, 'utf8');
-      const snapshot = JSON.parse(raw) as { version: number; entries: VFSFileIndexEntry[]; checksum: string };
+      const content = readFileSync(source, 'utf-8');
+      const snapshot = JSON.parse(content) as {
+        version: number;
+        entries: Array<[SanitizedPath, VFSFileIndexEntry]>;
+        checksum: string;
+      };
       if (!Array.isArray(snapshot.entries)) {
         return err(new Error('EINTEGRITY: index snapshot has no entries array'));
       }
       const body = JSON.stringify(snapshot.entries);
-      if (createHash('sha256').update(body).digest('hex') !== snapshot.checksum) {
+      if (typeof snapshot.checksum === 'string' && computeSha256(body) !== snapshot.checksum) {
         return err(new Error('EINTEGRITY: index snapshot checksum mismatch (corrupted or tampered)'));
       }
+      this.index.clear();
       let maxInode = this.inodeCounter;
-      for (const entry of snapshot.entries) {
-        this.index.set(entry.path as SanitizedPath, entry);
+      for (const [key, entry] of snapshot.entries) {
+        this.index.set(key, entry);
         const num = parseInt(String(entry.inode).replace('inode_', ''), 10);
         if (!Number.isNaN(num) && num >= maxInode) maxInode = num + 1;
       }
       this.inodeCounter = maxInode;
-      return ok(snapshot.entries.length);
+      return ok(this.index.size);
     } catch (e: any) {
-      return err(e instanceof Error ? e : new Error(`EFS: failed to load index snapshot: ${e.message}`));
+      return err(e instanceof Error ? e : new Error(String(e)));
     }
   }
 
   public dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
-    this.syncToDisk();
     if (this.syncTimer) {
       clearTimeout(this.syncTimer);
       this.syncTimer = null;
@@ -323,3 +335,4 @@ export class PersistentIndexer {
     this.index.clear();
   }
 }
+

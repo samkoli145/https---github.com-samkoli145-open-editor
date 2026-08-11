@@ -10,15 +10,15 @@
  */
 
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 
 import type { LocalizedString } from '../kernel/i18n/localized-string';
 import { ConstraintEngine, type ConstraintRule } from './intelligence/constraint-engine';
 import { CODE_DOMAIN_PROFILE } from './logic/domains/code-domain';
 import { ResourceQuotaGuard, type ResourceQuota } from './quota';
-import { parseShebang, inspectElfHeader } from '../system/vfs/file-type-detector';
+import { parseShebang, inspectElfHeader, type ElfHeaderInfo } from '../system/vfs/file-type-detector';
 import { sanitizePath } from '../system/vfs/path-sanitizer';
 
 export interface LinuxCommandRequest {
@@ -55,6 +55,7 @@ export interface LinuxCommandResult {
 
 export interface LinuxArchExecutionLayerOptions {
   allowedBinaries?: string[];
+  authorizedSignatures?: string[];
   extraRules?: ConstraintRule[];
   defaultAgentId?: string;
   constraintEngine?: ConstraintEngine;
@@ -65,8 +66,6 @@ export interface LinuxArchExecutionLayerOptions {
   enforceExecRoot?: boolean;
   rejectSetuidSetgid?: boolean;
   isolateAbsoluteTargets?: boolean;
-  /** بصمات SHA-256 المخوّلة لبرامج المسارات (مفتاح: المسار المطلق / الاسم الأساسي / اسم الأداة) — تُتحقق فورياً قبل التنفيذ. */
-  authorizedSignatures?: Record<string, string[]>;
 }
 
 export interface LinuxArchRecord {
@@ -103,6 +102,7 @@ const ARCH_SAFETY_RULES: ConstraintRule[] = [
 export class LinuxArchExecutionLayer {
   private readonly defaultAgentId: string;
   private readonly allowedBinaries: string[];
+  private readonly authorizedSignatures: string[];
   private readonly constraintEngine: ConstraintEngine;
   private readonly quotaGuard: ResourceQuotaGuard;
   private readonly maxExecutionTimeMs: number;
@@ -111,12 +111,12 @@ export class LinuxArchExecutionLayer {
   private readonly enforceExecRoot: boolean;
   private readonly rejectSetuidSetgid: boolean;
   private readonly isolateAbsoluteTargets: boolean;
-  private readonly authorizedSignatures: Record<string, string[]>;
   private readonly records: LinuxArchRecord[] = [];
 
   constructor(options: LinuxArchExecutionLayerOptions = {}) {
     this.defaultAgentId = options.defaultAgentId ?? 'linux';
     this.allowedBinaries = options.allowedBinaries ?? [...DEFAULT_ALLOWED_BINARIES];
+    this.authorizedSignatures = options.authorizedSignatures ?? [];
     this.constraintEngine = options.constraintEngine ?? new ConstraintEngine();
     this.quotaGuard = options.quotaGuard ?? new ResourceQuotaGuard();
     this.maxExecutionTimeMs = options.maxExecutionTimeMs ?? 10000;
@@ -125,7 +125,6 @@ export class LinuxArchExecutionLayer {
     this.enforceExecRoot = options.enforceExecRoot ?? true;
     this.rejectSetuidSetgid = options.rejectSetuidSetgid ?? true;
     this.isolateAbsoluteTargets = options.isolateAbsoluteTargets ?? true;
-    this.authorizedSignatures = options.authorizedSignatures ?? {};
 
     for (const rule of [...CODE_DOMAIN_PROFILE.defaultConstraints, ...ARCH_SAFETY_RULES, ...(options.extraRules ?? [])]) {
       this.constraintEngine.addRule(rule);
@@ -251,7 +250,6 @@ export class LinuxArchExecutionLayer {
 
     let execPath = parsed.toolName;
     let elfReason: string | undefined;
-    let inspectedRealPath: string | undefined;
 
     if (looksLikePath) {
       const targetPath = resolve(cwd ?? process.cwd(), parsed.toolName);
@@ -263,7 +261,6 @@ export class LinuxArchExecutionLayer {
         return denied('blocked', 'ESECURITY: path contains hidden/control characters (zero-width or bidi override)');
       }
       const inspected = this.inspectPath(targetPath);
-      inspectedRealPath = inspected.realPath;
       if (!inspected.exists) {
         return denied('not_found', `ENOENT: program '${parsed.toolName}' does not exist`);
       }
@@ -302,23 +299,38 @@ export class LinuxArchExecutionLayer {
           return denied('blocked', `EPERM: shebang interpreter '${program}' is not in the Arch execution allowlist`);
         }
       } else if (inspected.kind === 'data') {
-        return denied('blocked', `EPERM: '${parsed.toolName}' is an unknown binary format${inspected.elfNote ? ` — ${inspected.elfNote}` : ''} (not a valid executable ELF, no shebang)`);
+        const reasonDetail = inspected.elfInfo?.reason ? ` (${inspected.elfInfo.reason})` : '';
+        return denied('blocked', `EPERM: '${parsed.toolName}' is an unknown binary format or invalid ELF${reasonDetail}`);
       }
+
+      if (this.authorizedSignatures.length > 0) {
+        try {
+          const content = readFileSync(effectivePath);
+          const hash = createHash('sha256').update(content).digest('hex');
+          if (!this.authorizedSignatures.includes(hash)) {
+            return denied('blocked', `ESECURITY: binary checksum '${hash.slice(0, 12)}...' is not in authorizedSignatures allowlist`);
+          }
+        } catch {
+          return denied('error', `ENOENT: failed to read binary '${parsed.toolName}' for signature verification`);
+        }
+      }
+
+      // TOCTOU mitigation: re-verify target path immediately before execution
+      try {
+        const postCheckReal = realpathSync(effectivePath);
+        const postCheckStat = statSync(postCheckReal);
+        if (postCheckReal !== effectivePath || (postCheckStat.mode & 0o111) === 0) {
+          return denied('blocked', `ESECURITY: TOCTOU vulnerability detected - target binary '${parsed.toolName}' changed state or path between inspection and execution`);
+        }
+      } catch {
+        return denied('error', `ENOENT: program '${parsed.toolName}' mutated or disappeared prior to spawn`);
+      }
+
       execPath = effectivePath;
     }
 
     const tokens = request.commandLine.trim().split(/\s+/);
     const args = tokens.slice(1);
-
-    // فحص TOCTOU مزدوج (فجوة ن): إعادة التحقق الفورية مباشرة قبل spawn — يثبّت المسار الحقيقي،
-    // يرفض تبديل الروابط الرمزية/الاستبدال بين الفحص والتنفيذ، ويعيد فحص البتات المرتفعة،
-    // ويتحقق من بصمة SHA-256 عند وجود authorizedSignatures.
-    const toctouErr = looksLikePath
-      ? this.postCheckProgram(execPath, inspectedRealPath)
-      : this.postCheckBinary(parsed.toolName);
-    if (toctouErr) {
-      return denied('blocked', toctouErr);
-    }
 
     const outcome = await this.spawnCommand(execPath, args, {
       timeout: budgetMs,
@@ -402,8 +414,8 @@ export class LinuxArchExecutionLayer {
     privileged: boolean;
     mode: number;
     interpreter?: string;
-    elfNote?: string;
     realPath?: string;
+    elfInfo?: ElfHeaderInfo;
   } {
     let realPath: string;
     try {
@@ -424,21 +436,11 @@ export class LinuxArchExecutionLayer {
         const read = readSync(fd, buf, 0, 512, 0);
         const head = buf.subarray(0, read);
 
-        // فحص ELF عميق (فجوة ش): magic + e_ident/e_type — يرحب فقط بـ ET_EXEC/ET_DYN.
         if (head.length >= 4 && head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) {
-          const info = inspectElfHeader(head);
-          if (info && !info.isExecutable) {
-            return {
-              exists: true,
-              kind: 'data',
-              executable: (st.mode & 0o111) !== 0,
-              privileged,
-              mode: st.mode,
-              elfNote: `ELF ${info.eTypeName} (not ET_EXEC/ET_DYN)`,
-              realPath
-            };
-          }
-          return { exists: true, kind: 'elf', executable, privileged, mode: st.mode, realPath };
+          const elfInfo = inspectElfHeader(head);
+          // executable = بت التنفيذ الفعلي؛ نوع ELF غير القابل للتنفيذ (ET_REL/CORE) يُحجب
+          // في `execute` بفرع kind==='data' مع ذكر سبب elfInfo.reason — لا بقناع "لا بت تنفيذ".
+          return { exists: true, kind: elfInfo.isValid ? 'elf' : 'data', executable, privileged, mode: st.mode, realPath, elfInfo };
         }
 
         if (head.length >= 2 && head[0] === 0x23 && head[1] === 0x21) {
@@ -454,68 +456,6 @@ export class LinuxArchExecutionLayer {
     } catch {
       return { exists: false, kind: 'data', executable: false, privileged: false, mode: 0 };
     }
-  }
-
-  /** إعادة تحقق TOCTOU لبرامج المسارات المباشرة — تُستدعى فورياً قبل spawn. */
-  private postCheckProgram(execPath: string, expectedRealPath?: string): string | undefined {
-    let realNow: string;
-    try {
-      realNow = realpathSync(execPath);
-    } catch {
-      return 'ENOENT: program disappeared between inspection and execution (TOCTOU)';
-    }
-    if (expectedRealPath && realNow !== expectedRealPath) {
-      return `ESECURITY: program path changed between inspection and execution (symlink swap): '${expectedRealPath}' → '${realNow}'`;
-    }
-    let st;
-    try {
-      st = statSync(realNow);
-    } catch {
-      return 'ENOENT: program unreadable at execution time (TOCTOU)';
-    }
-    if (!st.isFile()) {
-      return 'EPERM: program is no longer a regular file (TOCTOU)';
-    }
-    if (this.rejectSetuidSetgid && (st.mode & 0o6000) !== 0) {
-      return `ESECURITY: program became setuid/setgid between inspection and execution (TOCTOU) (mode 0o${st.mode.toString(8)})`;
-    }
-    return this.checkAuthorizedSignature(execPath, realNow);
-  }
-
-  /** إعادة تحقق TOCTOU للأدوات المسماة في allowlist عند تكوين بصمات مخوّلة. */
-  private postCheckBinary(toolName: string): string | undefined {
-    if (Object.keys(this.authorizedSignatures).length === 0) return undefined;
-    const resolved = this.resolveToolPath(toolName);
-    if (!resolved) return undefined;
-    return this.checkAuthorizedSignature(resolved, resolved);
-  }
-
-  private resolveToolPath(toolName: string): string | undefined {
-    if (toolName.includes('/')) return undefined;
-    const dirs = (process.env.PATH || '').split(':').filter(Boolean);
-    for (const dir of dirs) {
-      const candidate = resolve(dir, toolName);
-      if (existsSync(candidate)) return candidate;
-    }
-    return undefined;
-  }
-
-  private checkAuthorizedSignature(execPath: string, filePath: string): string | undefined {
-    const allowed =
-      this.authorizedSignatures[execPath] ??
-      this.authorizedSignatures[basename(execPath)] ??
-      this.authorizedSignatures[basename(filePath)];
-    if (!allowed || allowed.length === 0) return undefined;
-    let sum: string;
-    try {
-      sum = createHash('sha256').update(readFileSync(filePath)).digest('hex');
-    } catch {
-      return 'ESECURITY: unable to checksum program before execution';
-    }
-    if (!allowed.includes(sum)) {
-      return `ESECURITY: program signature is not in the authorized set (sha256=${sum})`;
-    }
-    return undefined;
   }
 
   private containsControlChars(path: string): boolean {

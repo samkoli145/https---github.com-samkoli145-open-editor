@@ -1,14 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { PersistentIndexer, scanProject } from '../src/index';
-
-function bytesChecksum(buf: Uint8Array): string {
-  return createHash('sha256').update(buf).digest('hex');
-}
+import { PersistentIndexer, scanProject, bytesChecksum } from '../src/index';
 
 const SHEBANG_PY = '#!/usr/bin/env python3\nprint("hi")';
 const ELF_HEADER = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]);

@@ -1,9 +1,8 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { PersistentIndexer } from './persistent-indexer';
-import { inspectElfHeader } from './file-type-detector';
 
 export type ProjectFindingKind =
   | 'ok'
@@ -45,16 +44,8 @@ const DEFAULT_SKIP_DIRS = ['node_modules', 'dist', 'build', 'target', '.venv', '
 const ELF_MAGIC = (b: Uint8Array): boolean => b.length >= 4 && b[0] === 0x7f && b[1] === 0x45 && b[2] === 0x4c && b[3] === 0x46;
 const HAS_CONTROL_CHARS = (name: string): boolean => /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/.test(name);
 
-/** بصمة SHA-256 تشفيرية (فجوة ف) — بديل FNV-1a غير التشفيري؛ مطابقة لبصمة مؤشر النواة. */
-function bytesChecksum(buf: Uint8Array): string {
+export function bytesChecksum(buf: Uint8Array): string {
   return createHash('sha256').update(buf).digest('hex');
-}
-
-/** ELF حقيقي قابل للتنفيذ: رأس كامل بـ e_type=ET_EXEC/ET_DYN، أو توقيع مبتور يبقى مُعترفاً به تحفظاً. */
-function isExecutableElf(head: Uint8Array): boolean {
-  if (!ELF_MAGIC(head)) return false;
-  const info = inspectElfHeader(head);
-  return info === null || info.isExecutable;
 }
 
 /**
@@ -197,7 +188,7 @@ function inspectFile(
 
   const isExe = (st.mode & 0o111) !== 0;
   const privileged = (st.mode & 0o6000) !== 0;
-  const isElf = isExecutableElf(head);
+  const isElf = ELF_MAGIC(head);
   const isScript = head.length >= 2 && head[0] === 0x23 && head[1] === 0x21;
   const isProgram = isExe || isElf || isScript;
   const kind: 'elf' | 'script' | 'unknown' = isElf ? 'elf' : isScript ? 'script' : 'unknown';
