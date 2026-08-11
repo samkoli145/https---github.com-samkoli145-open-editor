@@ -77,7 +77,7 @@ export interface LinuxArchRecord {
   timestamp: number;
 }
 
-const DEFAULT_ALLOWED_BINARIES = [
+export const DEFAULT_ALLOWED_BINARIES = [
   'ls', 'pwd', 'echo', 'printf', 'cat', 'whoami', 'id', 'uname', 'arch', 'date', 'uptime',
   'df', 'du', 'free', 'stat', 'file', 'which', 'env',
   'grep', 'rg', 'ripgrep', 'find', 'tree', 'sed', 'awk', 'wc', 'head', 'tail', 'sort', 'uniq', 'cut', 'tr', 'yes',

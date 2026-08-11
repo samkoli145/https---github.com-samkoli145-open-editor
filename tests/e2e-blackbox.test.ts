@@ -232,3 +232,79 @@ describe('Nawat Black-Box E2E — project scan with persistent SHA-256 baseline 
     expect(actions).toContain('arch.execute');
   });
 });
+
+describe('Nawat Black-Box E2E — orchestrator kernel & tool discovery (العقل الموجّه)', () => {
+  it('lists discovered tools behind auth (200 + tools array)', async () => {
+    const res = await api('/api/editor/tools');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.tools)).toBe(true);
+    expect(body.tools.length).toBeGreaterThan(0);
+    const ids = body.tools.map((t: any) => t.id);
+    expect(ids).toEqual(expect.arrayContaining(['vscode', 'neovim', 'opencode']));
+  });
+
+  it('rejects /api/editor/tools without X-API-Key (401)', async () => {
+    const res = await api('/api/editor/tools', { key: null });
+    expect(res.status).toBe(401);
+  });
+
+  it('dispatches an inspect intent and reports the chosen tool', async () => {
+    const res = await api('/api/orchestrator/dispatch', {
+      method: 'POST',
+      body: { intent: 'inspect', path: 'server.ts' }
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('dispatched');
+    expect(body.toolUsed).toBeTruthy();
+  });
+
+  it('dispatches an exec intent through the arch security gates (200)', async () => {
+    const res = await api('/api/orchestrator/dispatch', {
+      method: 'POST',
+      body: { intent: 'exec', command: 'echo bb-orch-ok' }
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('success');
+    expect(body.toolUsed).toBe('Bash Terminal Agent');
+    expect(body.output).toContain('bb-orch-ok');
+  });
+
+  it('blocks an exec intent escaping the execution root (400)', async () => {
+    const res = await api('/api/orchestrator/dispatch', {
+      method: 'POST',
+      body: { intent: 'exec', command: 'cat /etc/hostname' }
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/outside the execution root/);
+  });
+
+  it('rejects exec via a shell (bash not allowlisted) (400)', async () => {
+    const res = await api('/api/orchestrator/dispatch', {
+      method: 'POST',
+      body: { intent: 'exec', command: 'bash -c "id"' }
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain('allowlist');
+  });
+
+  it('returns LSP diagnostics for a TypeScript file (200)', async () => {
+    const res = await api('/api/lsp/diagnostics?path=file.ts');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.diagnostics)).toBe(true);
+    expect(body.diagnostics.length).toBeGreaterThan(0);
+    expect(body.diagnostics[0].source).toBe('tsserver');
+  });
+
+  it('returns empty LSP diagnostics for unsupported files (200)', async () => {
+    const res = await api('/api/lsp/diagnostics?path=README.md');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.diagnostics).toEqual([]);
+  });
+});

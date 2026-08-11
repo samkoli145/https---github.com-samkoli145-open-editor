@@ -17,17 +17,17 @@
 src/  (55 ملفاً TS · 4845 سطراً)
 ├── kernel/        نواة P: 11 ملفاً / ~910 سطراً (kernel · core/{result,event-bus,disposable,types,cache} ·
 │                    i18n · service-container · command-registry · scheduler · extension-manager)
-├── host/          المستضيف: 6 ملفات / 608 سطراً (bootloader · runtime · profiles · vfs · config-loader)
+├── host/          المستضيف: 8 ملفات (bootloader · runtime · profiles · vfs · config-loader · editor-manager · lsp-adapter)
 ├── agent-kernel/  النواة العليا: 30 ملفاً (llm-core · syscalls · tools · registry · quota · session ·
 │                    storage · linux-arch-execution-layer) + hermes/ (7/489) + intelligence/ (5/343) +
 │                    logic/ (9/334)
 └── system/        النظام: 7 ملفات / 143 سطراً + engine/ (2/164) + vfs/ (3/405)
 
-bin/nawat.ts (71) · server.ts (1618) · tests/ (14 ملفات · 230 اختباراً)
+bin/nawat.ts (71) · server.ts (2080) · tests/ (15 ملفات · 255 اختباراً)
 ```
 
 **الحالة المثبتة اليوم (آخر تحقق):**
-- `bun install` ناجح · `tsc --noEmit` **نظيف** · `bun run build` **نظيف** (dist/server.cjs 67KB) · **230/230 اختباراً أخضر** (14 ملفات، ~3.3s).
+- `bun install` ناجح · `tsc --noEmit` **نظيف** · `bun run build` **نظيف** (dist/server.cjs 419KB) · **255/255 اختباراً أخضر** (15 ملفات، ~3.6s).
 
 ---
 
@@ -71,9 +71,9 @@ bin/nawat.ts (71) · server.ts (1618) · tests/ (14 ملفات · 230 اختبا
 1. ~~**ربط حقيقي للنواة العليا/هيرمس في المستضيف** — `bootloader.initializeKernel` يبني حالياً «أشباحاً» (stubs) لـ`agentKernel`/`hermes`/`editor` بدل ربط `HermesKernel`/`AgentKernel` الحقيقية (راجع §5-أ).~~ **تم** — ربط `HermesKernel` + نواة وكيل حقيقية (LLMCore/ToolRegistry/SessionManager) في `initializeKernel` (§5-أ).
 2. ~~**VFS وظيفية في المستضيف** — `host/vfs.ts` mount/dispose فقط؛ VFS الحقيقية في `system/vfs` غير موصولة.~~ **تم** — `host/vfs.ts` أصبح مدعوماً بـ`SafeStorageEngine` (write/read/exists/delete) (§5-هـ).
 3. **Ollama حقيقي** — `OllamaBackend.chat` يرد بمحاكاة وليس عبر `fetch` إلى ollama؛ تعطيل المحاكاة عند توفر نموذج.
- 4. ~~اختبارات E2E~~ **✅ عولج** — `e2e-server.test.ts` (9، mirror داخل العملية) + `e2e-blackbox.test.ts` (14، تشغيل `server.ts` الفعلي) + `nawat-cli.test.ts` (4).
- 5. **محرر كامل** — `editor` في البروفايلات مجرد اسم؛ لا قدرات محرر فعلية. (المرحلة 5)
- 6. ~~**واجهة فاتحة**~~ **✅ عولج** — نسخة `Web OS Station` (KDE Breeze/Dolphin) فاتحة (slate-100) بتقويم/ساعة/زر إيقاف/قائمة برامج.
+ 4. ~~اختبارات E2E~~ **✅ عولج** — `e2e-server.test.ts` (9، mirror داخل العملية) + `e2e-blackbox.test.ts` (22، تشغيل `server.ts` الفعلي) + `nawat-cli.test.ts` (4).
+ 5. ~~**محرر كامل**~~ **🟡 الجزء الأساسي تم** — أصبح **عقل موجّه (Orchestrator)**: اكتشاف المحررات والأدوات المثبتة (VS Code/Neovim/Vim/Sublime/Emacs/Helix/OpenCode/gopls/tsserver/Falkon/Chrome) + فتح ملف + توجيه intents + تشخيصات LSP (راجع §5-د) — الباقي: محرر واجهة كامل.
+ 6. ~~**واجهة فاتحة**~~ **✅ عولج** — نسخة `Web OS Station` (KDE Breeze/Dolphin) فاتحة (slate-100) بتقويم/ساعة/زر إيقاف/قائمة برامج + تبويب العقل الموجّه التفاعلي.
  7. **كرة الثلج** — تعلم من مصادر متعددة (`snowball.ts`) لم يُنفَّذ.
  8. **استكمال المراجعة** — بنود §3 (المقطّر/البروفايلات/الفهرسة/الضغط/التشغيل الفعلي).
 
@@ -92,13 +92,14 @@ bin/nawat.ts (71) · server.ts (1618) · tests/ (14 ملفات · 230 اختبا
 | ت | ~~لا جسر بين `ToolRegistry` و`CommandRegistry`~~ **✅ عولج** — `ToolRegistry(commandRegistry?)` + `attachCommandRegistry` + `syncToolToCommand` → أوامر `tool.<name>` تلقائياً | `agent-kernel/tools.ts` + `host/bootloader.ts` | **تم** — اختبار: `tool.echo`/`tool.now` مسجّلتان وقابلتا التنفيذ ✓ |
 | خ | ~~لا ربط بين الجلسات والحصص~~ **✅ عولج** — `SessionManager(eventBus, quotaGuard)` + `SessionInstance.executeRequest` يحسب `trackSyscall` ويبث `interrupt_request` عند تجاوز الحصة | `agent-kernel/session.ts` + `host/bootloader.ts` | **تم** — اختبار: بعد حصة 2/دقيقة تُرفض الثالثة بـ`EQUOTA_EXCEEDED` ✓ |
 | ذ | ~~لا نقطة OpenAI متوافقة~~ **✅ عولج** — `/api/v1/chat/completions` عبر `HermesKernel.serve` + fallback بـ`LLMCore.chat` (API صحيح)، مع `/api/hermes/serve` و`/api/hermes/train` + حدث `arch:command_executed` — كلها تحت المصادقة `X-API-Key` والتدقيق | `server.ts` | **تم** — E2E: 401 بلا مفتاح · completion بتنسيق OpenAI ✓ · serve (calc=42) ✓ · train ✓ · `arch:command_executed` في /api/events ✓ |
+| د | **العقل الموجّه (Orchestrator Kernel)** — اكتشاف الأدوات الناضجة المثبتة على النظام (محررات/خوادم لغات/متصفحات/وكلاء طرفية) والتفاعل معها كأطراف تنفيذية. أُضيفت نسخة archive: `EditorManager` (12 أداة معروفة + `which` + محول CLI عام) + `LanguageServerProtocolAdapter` (تشخيصات/اقتراحات) + مسارات `/api/editor/tools` · `/api/editor/open` · `/api/orchestrator/dispatch` · `/api/lsp/diagnostics` + تبويب واجهة تفاعلي (يسحب القوائم تلقائياً) + أوامر `host.editor.scan`/`host.editor.open`/`host.orchestrator.dispatch`/`host.lsp.diagnose` — تحت مصادقة `X-API-Key`. **تحصيننا:** ① إصلاح `exec` الصامت (كان `bash <args>` بلا `bash` في allowlist → no-op زائف) — أصبح يُوجَّه عبر `LinuxArchExecutionLayer` نفسه فيصطدم ببوابات الأمان؛ ② إضافة أوامر الأدوات المكتشفة إلى allowlist المحوّل (استثناء `bash` عمداً) ليعمل الفتح الفعلي؛ ③ إصلاح مرجع `bootloader.editor` غير المعرَّف في نسخة archive (إلى `runtime.editor`)؛ ④ واجهات/أدوات نسخة archive كانت خلف المصادقة بالفعل | `host/editor-manager.ts` + `host/lsp-adapter.ts` + `bootloader.ts` + `server.ts` | **تم** — `editor-manager.test.ts` (17): اكتشاف/اختيار أفضل أداة/dispatch exec (مسموح ✓ · هروب جذر ✓ · bash مرفوض ✓ · rm -rf ✓) · LSP (ts/go/غير مدعوم/اقتراحات) · أوامر bootloader ✓ — E2E blackbox (8): tools 200/401 · inspect dispatched · exec عبر البوابات · escape→400 · bash→400 · LSP ts/غير مدعوم ✓ |
 | و | `ExecutionSandboxEngine.execute` يرجع رسالة جاهزة لا تنفيذاً | `system/engine/execution-sandbox.ts:76-97` | **تم على مستوى أرش:** `LinuxArchExecutionLayer` ينفّذ فعلياً (بوابات + حصص + ELF/shebang). الباقي: إعادة توجيه `ExecutionSandboxEngine` إلى الطبقة، أو استبداله بها |
 | ز | أداة `calc` تستخدم `new Function` | `agent-kernel/tools.ts:125` | محلِّل حسابي خاص (shunting-yard) بلا eval |
 | ح | `SessionInstance.emitStream` يبتلع أخطاء المستمعين صامتاً | `agent-kernel/session.ts:55-61` | توجيهها إلى `EventBus`/onError بدل `// Safe listener logging` |
 | ط | `@google/genai` في dependencies وغير مستخدم إطلاقاً | `package.json:28` | حذفه (المشروع محلي بلا سحابة) |
 | ي | نقاط REST تسمح بتسجيل أوامر/إضافات بلا مصادقة على `0.0.0.0` — **وأصبح أخطر**: `/api/arch/execute` ينفّذ أوامر نظام (مقيّدة بالبوابات لكنها منفذة فعلاً) | `server.ts:180,242` + `/api/arch/execute` | فتحها محلياً فقط (`127.0.0.1`) أو إضافة مفتاح/تقييد + تسجيل تدقيق إلزامي |
 | ك | `estimateTokens` تقدير خام (طول/4) | `agent-kernel/intelligence/context-model.ts:43` | عدّاد توكنات معياري قابل للحقن |
-| ل | ~~لا اختبار آلي لـ`server.ts`/`bin/nawat.ts`~~ **✅ عولج** (نسخة archive) — E2E mirror + E2E أسود حقيقي + CLI | `tests/e2e-server.test.ts` + `e2e-blackbox.test.ts` + `nawat-cli.test.ts` | **تم** — blackbox: 401/200/403 · أمر echo · arch allowed+blocked (مطلق ونسبي `..`) · serve/train · chat (شكل OpenAI) · scan (tampered/ok/unregistered/hidden/backdoor/outside_link) · خط أساس دائم عبر الجلسات · audit ✓ |
+| ل | ~~لا اختبار آلي لـ`server.ts`/`bin/nawat.ts`~~ **✅ عولج** (نسخة archive) — E2E mirror + E2E أسود حقيقي + CLI | `tests/e2e-server.test.ts` + `e2e-blackbox.test.ts` (22) + `nawat-cli.test.ts` | **تم** — blackbox: 401/200/403 · أمر echo · arch allowed+blocked (مطلق ونسبي `..`) · serve/train · chat (شكل OpenAI) · scan (tampered/ok/unregistered/hidden/backdoor/outside_link) · خط أساس دائم عبر الجلسات · audit · **أدوات العقل الموجّه** (tools/dispatch/LSP) ✓ |
 | م | `ExecutionSandboxEngine.execute` لا يزال رسالة جاهزة | `system/engine/execution-sandbox.ts:76-97` | إعادة توجيهه إلى `LinuxArchExecutionLayer` (التنفيذ الفعلي أصبح فيها) |
 | ن | ~~**TOCTOU** بين `inspectPath` و`execFile`: يُفحص المسار ثم يُنفَّذ بمسار قد يتغير~~ **✅ عولج** (نسخة archive) — إعادة تحقق فورية قبل spawn: `realpathSync` (تبديل symlink/استبدال مسار) + `stat` (اختفاء/تبدل/فقدان بت التنفيذ) + فحص `authorizedSignatures` (قائمة SHA-256) | `linux-arch-execution-layer.ts:306-327` | **تم** — اختباران (بصمة مخوّلة تنفّذ ✓ · محتوى غير مأذون محجوب ✓) + اختبار رابط-حقيقي ✓ |
 | س | ~~لا عزل نظامي في التنفيذ الأرشي~~ **✅ عولج** — عزل بجذر تنفيذ إلزامي (فجوة س): `enforceExecRoot` افتراضي `true` — root = `execRoot`/cwd/جذر العمل؛ cwd خارج الجذر → رفض؛ أهداف مطلقة خارج الجذر (`cat /etc/hostname`، `touch /etc/x`) → `ESECURITY`؛ بلا cwd يُنفَّذ داخل الجذر؛ `parseCommand` يعالج المطلق كـ target لا subCommand + هروب نسبي `..` عبر `resolve(cwd, target)` | `linux-arch-execution-layer.ts` + `server.ts` (execRoot=project dir) | **تم** — اختبارات (pwd داخل الجذر · cwd خارج مرفوض · /etc مرفوض حتى للمعدوم · نسبي يعمل) · E2E: cat /etc/hostname→denied ✓ · cat ../../etc/hostname→denied ✓ |
@@ -116,6 +117,7 @@ bin/nawat.ts (71) · server.ts (1618) · tests/ (14 ملفات · 230 اختبا
 
 | التاريخ | ما تحقق | الاختبارات |
 |---|---|---|
+| اليوم | **العقل الموجّه (Orchestrator)**: اعتماد نسخة archive المحدَّثة — `editor-manager.ts` (اكتشاف 12 أداة: VS Code/Neovim/Vim/Sublime/Emacs/Helix/OpenCode/gopls/tsserver/Falkon/Chrome/Bash-Term + محول CLI) · `lsp-adapter.ts` · ربط `bootloader` (subsystem.editor + 4 أوامر) · 4 مسارات REST + تبويب واجهة تفاعلي — ثم إعادة تحصين: ① أصلحنا **مرجع `bootloader.editor` غير المعرَّف** (نسخة archive لا تُترجم → `runtime.editor`) · ② إصلاح **`exec` الصامت** (كان `bash <args>` no-op زائف لأن `bash` خارج allowlist) → يمر الآن عبر `LinuxArchExecutionLayer` فتصطدم الأوامر بالبوابات (allowlist/جذر تنفيذ/قيود/حصص) · ③ أضفنا أوامر الأدوات المكتشفة إلى allowlist المحوّل (بلا `bash`) ليعمل الفتح الفعلي · ④ **أعدنا تحصين ما رجعته نسخة archive**: `PORT`/`127.0.0.1` · إصلاح معيار الفحص (checksum-كـ-content) + خط أساس دائم · `executable && elfInfo.isValid` (قناع ELF) — وتحقّقنا أن تحصيناتنا السابقة (TOCTOU/أصالة/جذر/فهرس EINTEGRITY/رفض setuid/مصادقة/تدقيق) لم تُمَس في طبقة الأرش والفهرس | `tsc` نظيف · `build` نظيف (419KB) · **255/255** (15 ملفات) · `editor-manager.test.ts` (17) · blackbox (22): tools 401/200 · inspect dispatched · exec عبر البوابات ✓ · escape→400 ✓ · bash→400 ✓ · LSP ✓ · تحقّق من بقاء اختبارات التحصين الستة السابقة ✓ |
 | اليوم | **اعتماد نسخة `archive` كأساس** (واجهة Web OS Station + حلول الطرف بجذورها) ثم إعادة التحصين: ① `PORT` من البيئة + ربط `127.0.0.1` افتراضياً (archive كان `0.0.0.0` ثابتاً) · ② إصلاح خطأ تسجيل المعيار في `/api/projects/scan` (كان يمرر بصمة checksum كـ content فيصبح كل ملف معبثاً) + إحياء بصمة العميل + خط أساس دائم يُحمَّل ويُحفظ تلقائياً · ③ `PersistentIndexer` حفظ ذرّي + غلاف SHA-256 + `EINTEGRITY` عند التحميل (archive كان JSON خاماً) · ④ إصلاح قناع `executable && isValid` الذي يخفي سبب رفض ELF غير القابل للتنفيذ · ⑤ E2E أسود حقيقي `e2e-blackbox.test.ts` (14) يُقلع `server.ts` الفعلي + اختبارات فهرس/أرش | `tsc` نظيف · `build` نظيف · **230/230** · blackbox: 401/403/200 · arch مطلق ونسبي blocked · scan tampered/خط أساس دائم عبر الجلسات ✓ · audit ✓ |
 | اليوم | مراجعة التحديثات · تحديث `kernel.md` للهيكل الجديد · توثيق الحالة | `tsc` نظيف · `build` نظيف · **127/127** |
 | اليوم | طبقة `LinuxArchExecutionLayer` (تنفيذ حقيقي + بوابات أرش) · دعم الملفات المجهولة (shebang/ثنائي مجهول) · تحصين الملفات المخفية (جذر realpath · Unicode · devices · dotfiles) | `tsc` نظيف · **166/166** |

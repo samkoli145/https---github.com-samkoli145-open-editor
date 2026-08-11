@@ -10,6 +10,8 @@ import { SafeStorageEngine } from '../agent-kernel/storage';
 import { LLMCore, DeterministicBackend } from '../agent-kernel/llm-core';
 import { SessionManager } from '../agent-kernel/session';
 import { ResourceQuotaGuard } from '../agent-kernel/quota';
+import { EditorManager } from './editor-manager';
+import { LanguageServerProtocolAdapter } from './lsp-adapter';
 
 export interface BootOptions {
   profile?: ProfileName;
@@ -183,9 +185,19 @@ export class Bootloader {
       }
 
       if (this._profileConfig.enableEditor) {
+        const editorManager = new EditorManager();
+        editorManager.scanSystemForEditors();
+        const lspAdapter = new LanguageServerProtocolAdapter();
+
         subsystems.editor = {
           name: 'EditorWorkbench',
-          status: 'active'
+          status: 'active',
+          manager: editorManager,
+          editorManager,
+          lspAdapter,
+          scan: () => editorManager.getDiscoveredTools(),
+          openFile: (filePath: string, line?: number, toolId?: string) => editorManager.openFile(filePath, line, toolId),
+          dispatch: (intent: any, payload: any) => editorManager.dispatchIntent(intent, payload)
         };
       }
 
@@ -210,6 +222,58 @@ export class Bootloader {
           metrics: this._runtime!.getMetrics()
         })
       });
+
+      if (this._profileConfig.enableEditor) {
+        ctx.commands.register({
+          id: 'host.editor.scan',
+          title: { ar: 'فحص المحررات والأدوات المثبتة', en: 'Scan Installed Editors & Tools' },
+          category: { ar: 'المحرر', en: 'Editor' },
+          description: { ar: 'اكتشاف المحررات وأدوات التطوير على النظام', en: 'Discover installed system editors and tools' },
+          handler: () => {
+            const ed = this.editor;
+            return ed?.manager ? ed.manager.getDiscoveredTools() : [];
+          }
+        });
+
+        ctx.commands.register({
+          id: 'host.editor.open',
+          title: { ar: 'فتح ملف في أداة تطوير', en: 'Open File in Editor Tool' },
+          category: { ar: 'المحرر', en: 'Editor' },
+          description: { ar: 'توجيه فتح الملف للمحرر المناسب', en: 'Open target file using best editor' },
+          handler: async (p: any) => {
+            const ed = this.editor;
+            if (!ed?.manager) return { error: 'Editor manager unavailable' };
+            const res = await ed.manager.openFile(p?.path || p?.filePath || 'server.ts', p?.line || 1, p?.toolId);
+            return res.isOk ? res.value : { error: res.error.message };
+          }
+        });
+
+        ctx.commands.register({
+          id: 'host.orchestrator.dispatch',
+          title: { ar: 'توجيه العقل الموجه', en: 'Orchestrator Kernel Dispatch' },
+          category: { ar: 'النواة', en: 'Kernel' },
+          description: { ar: 'معالجة النواة كعقل موجه لأدوات النظام', en: 'Dispatch intent to system tool agents' },
+          handler: async (p: any) => {
+            const ed = this.editor;
+            if (!ed?.manager) return { error: 'Editor manager unavailable' };
+            const res = await ed.manager.dispatchIntent(p?.intent || 'inspect', p || {});
+            return res.isOk ? res.value : { error: res.error.message };
+          }
+        });
+
+        ctx.commands.register({
+          id: 'host.lsp.diagnose',
+          title: { ar: 'فحص التشخيصات اللغوية LSP', en: 'LSP Language Diagnostics' },
+          category: { ar: 'المحرر', en: 'Editor' },
+          description: { ar: 'قراءة أخطاء وتوجيهات خوادم اللغات', en: 'Get diagnostics from language servers' },
+          handler: async (p: any) => {
+            const ed = this.editor;
+            if (!ed?.lspAdapter) return [];
+            const res = await ed.lspAdapter.getDiagnostics(p?.path || p?.filePath || 'server.ts');
+            return res.isOk ? res.value : [];
+          }
+        });
+      }
 
       if (this._profileConfig.enableAgentKernel) {
         ctx.commands.register({

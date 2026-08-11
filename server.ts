@@ -531,6 +531,54 @@ app.post('/api/projects/scan', (req, res) => {
   res.json(report);
 });
 
+// Orchestrator Kernel & Editor Discovery Endpoints
+app.get('/api/editor/tools', (_req, res) => {
+  const ed = runtime.editor;
+  if (ed?.manager) {
+    return res.json({ tools: ed.manager.getDiscoveredTools() });
+  }
+  res.json({ tools: [] });
+});
+
+app.post('/api/editor/open', async (req, res) => {
+  const ed = runtime.editor;
+  if (!ed?.manager) {
+    return res.status(500).json({ error: 'Editor manager unavailable' });
+  }
+  const { path: filePath, line, toolId } = req.body || {};
+  const result = await ed.manager.openFile(filePath || 'server.ts', Number(line) || 1, toolId);
+  if (result.isOk) {
+    return res.json(result.value);
+  }
+  res.status(400).json({ error: result.error.message });
+});
+
+app.post('/api/orchestrator/dispatch', async (req, res) => {
+  const ed = runtime.editor;
+  if (!ed?.manager) {
+    return res.status(500).json({ error: 'Orchestrator Kernel unavailable' });
+  }
+  const { intent, payload } = req.body || {};
+  const result = await ed.manager.dispatchIntent(intent || 'inspect', payload || req.body || {});
+  if (result.isOk) {
+    return res.json(result.value);
+  }
+  res.status(400).json({ error: result.error.message });
+});
+
+app.get('/api/lsp/diagnostics', async (req, res) => {
+  const ed = runtime.editor;
+  if (!ed?.lspAdapter) {
+    return res.json({ diagnostics: [] });
+  }
+  const filePath = String(req.query.path || 'server.ts');
+  const result = await ed.lspAdapter.getDiagnostics(filePath);
+  if (result.isOk) {
+    return res.json({ diagnostics: result.value });
+  }
+  res.json({ diagnostics: [] });
+});
+
 // Web UI Dashboard Endpoint
 app.get('/', (_req, res) => {
   res.send(`<!DOCTYPE html>
@@ -636,6 +684,14 @@ app.get('/', (_req, res) => {
 
       <!-- Right App Items Pane -->
       <div class="col-span-2 space-y-1.5 max-h-[300px] overflow-y-auto pr-1" id="kickoff-app-list">
+        <div onclick="launchApp('orchestrator')" class="p-2.5 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 cursor-pointer transition flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-800 flex items-center justify-center font-bold text-base">🎛️</div>
+          <div>
+            <div class="text-xs font-bold text-slate-800">Orchestrator & Editor Tools (العقل الموجه)</div>
+            <div class="text-[11px] text-slate-500">Discover VS Code, Neovim, Emacs, Helix & dispatch tasks</div>
+          </div>
+        </div>
+
         <div onclick="launchApp('dolphin')" class="p-2.5 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 cursor-pointer transition flex items-center gap-3">
           <div class="w-8 h-8 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center font-bold text-base">📁</div>
           <div>
@@ -868,8 +924,13 @@ app.get('/', (_req, res) => {
         <span class="text-[11px] text-slate-400 font-mono">Select App to Open</span>
       </div>
 
-      <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-2">
-        <button onclick="switchTab('arch')" id="tab-arch" class="p-2.5 rounded-lg border text-right transition flex flex-col items-center justify-center text-center gap-1 bg-emerald-50 border-emerald-300 text-emerald-800 font-bold shadow-xs">
+      <div class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-9 gap-2">
+        <button onclick="switchTab('orchestrator')" id="tab-orchestrator" class="p-2.5 rounded-lg border text-right transition flex flex-col items-center justify-center text-center gap-1 bg-indigo-50 border-indigo-300 text-indigo-800 font-bold shadow-xs">
+          <span class="text-lg">🎛️</span>
+          <span class="text-xs">العقل الموجه</span>
+        </button>
+
+        <button onclick="switchTab('arch')" id="tab-arch" class="p-2.5 rounded-lg border text-right transition flex flex-col items-center justify-center text-center gap-1 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
           <span class="text-lg">💻</span>
           <span class="text-xs">منفذ Arch</span>
         </button>
@@ -913,8 +974,63 @@ app.get('/', (_req, res) => {
 
     <!-- WINDOW WORKSPACE VIEWS -->
 
+    <!-- TAB 0: Orchestrator Kernel & Discovered Tools -->
+    <div id="view-orchestrator" class="space-y-4">
+      <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <h2 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+            <span class="text-base">🎛️</span> العقل الموجّه والمحررات المثبتة (Kernel Orchestrator & Tool Discovery)
+          </h2>
+          <span class="text-[11px] bg-indigo-50 text-indigo-800 px-2.5 py-0.5 rounded-full font-mono border border-indigo-200">Intelligent Broker Engine</span>
+        </div>
+        <p class="text-xs text-slate-600 leading-relaxed">
+          تتفاعل النواة كـ "عقل موجّه" مع أدوات التطوير والمحررات المثبتة على النظام (VS Code, Neovim, Vim, Sublime, Emacs, Helix, OpenCode, Falkon Browser, gopls, tsserver) لفتح الملفات وتوجيه أوامر التعديل والفحص الهادئ.
+        </p>
+
+        <!-- Dispatcher Form -->
+        <div class="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+          <div class="text-xs font-bold text-slate-800">توجيه أداة تنفيذية (Dispatch Execution Intent)</div>
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-700 mb-1">نوع المهمة (Intent)</label>
+              <select id="orch-intent" class="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-800">
+                <option value="edit">تعديل وفتح (edit)</option>
+                <option value="inspect">معاينة وفحص (inspect)</option>
+                <option value="format">تنسيق الكود (format)</option>
+                <option value="browse">استعراض متصفح (browse)</option>
+                <option value="exec">تنفيذ هادئ (exec)</option>
+              </select>
+            </div>
+            <div class="md:col-span-2">
+              <label class="block text-[11px] font-semibold text-slate-700 mb-1">الملف المستهدف / المسار</label>
+              <input type="text" id="orch-path" value="server.ts" class="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-800" />
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-700 mb-1">السطر (Line)</label>
+              <input type="number" id="orch-line" value="1" class="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-800" />
+            </div>
+          </div>
+          <button onclick="dispatchOrchestratorIntent()" class="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs transition shadow-xs">
+            توجيه المهمة للعقل الموجه (Dispatch Intent)
+          </button>
+          <pre id="orch-output" class="p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-700 min-h-[60px]">في انتظار التوجيه...</pre>
+        </div>
+
+        <!-- Discovered Tools Grid -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-bold text-slate-800">الأدوات والمحررات المكتشفة على النظام</h3>
+            <button onclick="loadDiscoveredTools()" class="text-[11px] text-indigo-700 font-bold hover:underline">إعادة المسح 🔄</button>
+          </div>
+          <div id="tools-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            <div class="text-xs text-slate-400 col-span-3">جاري اكتشاف الأدوات والمحررات...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- TAB 1: Arch Layer Exec -->
-    <div id="view-arch" class="space-y-4">
+    <div id="view-arch" class="hidden space-y-4">
       <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-4">
         <div class="flex items-center justify-between border-b border-slate-100 pb-3">
           <h2 class="text-sm font-bold text-slate-900 flex items-center gap-2">
@@ -1160,64 +1276,158 @@ app.get('/', (_req, res) => {
   </main>
 
   <!-- CachyOS KDE Plasma Bottom Taskbar Panel -->
-  <footer class="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur border-t border-slate-200 shadow-lg px-4 py-1.5 flex items-center justify-between">
+  <footer class="fixed bottom-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-md border-t border-slate-200/90 shadow-xl px-4 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs">
     <div class="flex items-center gap-2">
       <!-- CachyOS / KDE Kickoff Launcher Button -->
-      <button onclick="toggleLauncherMenu()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center gap-2 shadow-xs transition active:scale-95">
+      <button onclick="toggleLauncherMenu()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center gap-2 shadow-xs transition active:scale-95" title="قائمة التبديل والبرامج Kickoff Menu">
         <span class="text-sm">ن</span>
         <span>Applications</span>
       </button>
 
-      <!-- Active Taskbar Windows Buttons -->
-      <div class="flex items-center gap-1 overflow-x-auto py-0.5">
-        <button onclick="switchTab('dolphin')" id="tab-dolphin" class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-sky-50 border-sky-300 text-sky-800">
-          <span>📁</span>
-          <span>Dolphin</span>
+      <!-- Active Taskbar Window Indicator & Selector Dropdown -->
+      <div class="relative inline-block">
+        <button onclick="toggleTaskSwitcher()" class="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 font-bold flex items-center gap-2 shadow-2xs hover:bg-slate-50 transition">
+          <span id="active-app-icon">📁</span>
+          <span id="active-app-title">Dolphin File Browser</span>
+          <span class="text-[10px] text-slate-400">▼</span>
         </button>
-        <button onclick="switchTab('arch')" id="tab-arch" class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
-          <span>💻</span>
-          <span>Arch Exec</span>
-        </button>
-        <button onclick="switchTab('commands')" id="tab-commands" class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
-          <span>⚡</span>
-          <span>Commands</span>
-        </button>
-        <button onclick="switchTab('scan')" id="tab-scan" class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
-          <span>🛡️</span>
-          <span>Scanner</span>
-        </button>
-        <button onclick="switchTab('extensions')" id="tab-extensions" class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
-          <span>🧩</span>
-          <span>Extensions</span>
-        </button>
-        <button onclick="switchTab('events')" id="tab-events" class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
-          <span>📡</span>
-          <span>Events</span>
-        </button>
-        <button onclick="switchTab('scheduler')" id="tab-scheduler" class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
-          <span>⏱️</span>
-          <span>Scheduler</span>
-        </button>
-        <button onclick="switchTab('i18n')" id="tab-i18n" class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
-          <span>🌐</span>
-          <span>i18n</span>
-        </button>
-        <button onclick="switchTab('help')" id="tab-help" class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
-          <span>📖</span>
-          <span>Help</span>
-        </button>
+
+        <!-- Task Switcher Dropdown Menu -->
+        <div id="task-switcher-menu" class="hidden absolute bottom-11 right-0 w-64 bg-white/98 backdrop-blur border border-slate-300 rounded-xl shadow-xl p-1.5 space-y-1 z-50">
+          <div class="text-[10px] font-bold text-slate-400 px-2 py-1 uppercase tracking-wider">النوافذ المتاحة والنواة (Active Windows)</div>
+          <button onclick="launchApp('orchestrator')" class="w-full text-right px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 text-slate-700 font-medium flex items-center gap-2">
+            <span>🎛️</span> <span>Orchestrator & Editor Tools</span>
+          </button>
+          <button onclick="launchApp('dolphin')" class="w-full text-right px-2.5 py-1.5 rounded-lg hover:bg-sky-50 text-slate-700 font-medium flex items-center gap-2">
+            <span>📁</span> <span>Dolphin File Manager</span>
+          </button>
+          <button onclick="launchApp('arch')" class="w-full text-right px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 text-slate-700 font-medium flex items-center gap-2">
+            <span>💻</span> <span>Arch Exec Layer</span>
+          </button>
+          <button onclick="launchApp('commands')" class="w-full text-right px-2.5 py-1.5 rounded-lg hover:bg-amber-50 text-slate-700 font-medium flex items-center gap-2">
+            <span>⚡</span> <span>Commands Registry</span>
+          </button>
+          <button onclick="launchApp('scan')" class="w-full text-right px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 text-slate-700 font-medium flex items-center gap-2">
+            <span>🛡️</span> <span>Security Scanner</span>
+          </button>
+          <button onclick="launchApp('extensions')" class="w-full text-right px-2.5 py-1.5 rounded-lg hover:bg-purple-50 text-slate-700 font-medium flex items-center gap-2">
+            <span>🧩</span> <span>Extensions Manager</span>
+          </button>
+          <button onclick="launchApp('events')" class="w-full text-right px-2.5 py-1.5 rounded-lg hover:bg-teal-50 text-slate-700 font-medium flex items-center gap-2">
+            <span>📡</span> <span>EventBus Console</span>
+          </button>
+          <button onclick="launchApp('scheduler')" class="w-full text-right px-2.5 py-1.5 rounded-lg hover:bg-amber-50 text-slate-700 font-medium flex items-center gap-2">
+            <span>⏱️</span> <span>Debounce Scheduler</span>
+          </button>
+          <button onclick="launchApp('i18n')" class="w-full text-right px-2.5 py-1.5 rounded-lg hover:bg-slate-100 text-slate-700 font-medium flex items-center gap-2">
+            <span>🌐</span> <span>i18n Translator</span>
+          </button>
+          <button onclick="launchApp('help')" class="w-full text-right px-2.5 py-1.5 rounded-lg hover:bg-slate-100 text-slate-700 font-medium flex items-center gap-2">
+            <span>📖</span> <span>Help & Docs</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick Pinned Icons -->
+      <div class="hidden sm:flex items-center gap-1 border-r border-slate-200 pr-2 mr-1">
+        <button onclick="launchApp('dolphin')" class="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700" title="Dolphin File Manager">📁</button>
+        <button onclick="launchApp('arch')" class="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700" title="Arch Exec Console">💻</button>
+        <button onclick="launchApp('scan')" class="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700" title="Security Scanner">🛡️</button>
       </div>
     </div>
 
-    <!-- Right Taskbar Tray -->
-    <div class="flex items-center gap-3 text-xs font-mono text-slate-700">
-      <div class="hidden md:flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
-        <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-        <span class="text-[11px] font-bold">CachyOS KDE Plasma</span>
+    <!-- Right System Tray Panel (Kernel Health, Memory, Pending Tasks, Lifecycle Menu, Clock) -->
+    <div class="flex items-center gap-2 font-mono text-xs">
+      
+      <!-- Kernel RAM Usage Meter -->
+      <div class="hidden md:flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 text-slate-700 shadow-2xs" title="استهلاك الذاكرة العشوائية للخدمة">
+        <span>💾</span>
+        <span id="tray-memory" class="font-semibold text-[11px]">248 MB / 1024 MB</span>
       </div>
-      <div id="tray-clock" class="font-bold">--:--:--</div>
+
+      <!-- Pending Tasks Counter Badge -->
+      <div class="hidden sm:flex items-center gap-1 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200 text-slate-700 shadow-2xs" title="المهام المعلقة في قائمة الانتظار">
+        <span>⚡</span>
+        <span id="tray-pending-tasks" class="font-semibold text-[11px]">0 Pending</span>
+      </div>
+
+      <!-- Kernel Status Health Badge -->
+      <div id="tray-kernel-status" class="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 px-2.5 py-1 rounded-lg font-semibold text-[11px] shadow-2xs">
+        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span id="tray-status-text">Booted</span>
+      </div>
+
+      <!-- System Power Lifecycle Menu Button -->
+      <button onclick="toggleSystemLifecycleModal()" class="px-2.5 py-1 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 text-slate-700 border border-slate-200 rounded-lg font-bold flex items-center gap-1 shadow-2xs transition">
+        <span>⚙️</span>
+        <span class="hidden sm:inline">System</span>
+      </button>
+
+      <!-- Tray Live Clock -->
+      <div id="tray-clock" class="bg-white px-2.5 py-1 rounded-lg border border-slate-200 text-slate-800 font-bold shadow-2xs">--:--:--</div>
     </div>
   </footer>
+
+  <!-- System Lifecycle Management Modal (Shut Down, Restart, Suspend Options) -->
+  <div id="system-lifecycle-modal" class="hidden fixed inset-0 z-50 bg-slate-900/30 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white/98 border border-slate-300 rounded-2xl shadow-2xl max-w-md w-full p-5 space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div class="flex items-center gap-2">
+          <div class="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-lg">ن</div>
+          <div>
+            <h3 class="text-sm font-bold text-slate-900">إدارة وضعية تشغيل النواة</h3>
+            <p class="text-[11px] text-slate-500 font-mono">Nawat Kernel Lifecycle Control</p>
+          </div>
+        </div>
+        <button onclick="toggleSystemLifecycleModal()" class="text-slate-400 hover:text-slate-600 font-bold text-sm">✕</button>
+      </div>
+
+      <p class="text-xs text-slate-600 leading-relaxed">
+        حدد الإجراء المطلوب للتحكم بخدمات نواة المطور ومحركات النظام:
+      </p>
+
+      <div class="space-y-2">
+        <button onclick="applyKernelLifecycleAction('restart')" class="w-full p-3 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-right transition flex items-center justify-between group">
+          <div class="flex items-center gap-3">
+            <span class="text-xl">🔄</span>
+            <div>
+              <div class="text-xs font-bold text-slate-800 group-hover:text-emerald-900">إعادة التشغيل (Restart Kernel)</div>
+              <div class="text-[11px] text-slate-500">إعادة تحميل المحركات وتحديث ذاكرة التخزين المؤقت</div>
+            </div>
+          </div>
+          <span class="text-xs text-emerald-600 font-bold">Reboot</span>
+        </button>
+
+        <button onclick="applyKernelLifecycleAction('suspend')" class="w-full p-3 rounded-xl bg-slate-50 hover:bg-amber-50 border border-slate-200 hover:border-amber-300 text-right transition flex items-center justify-between group">
+          <div class="flex items-center gap-3">
+            <span class="text-xl">⏸️</span>
+            <div>
+              <div class="text-xs font-bold text-slate-800 group-hover:text-amber-900">تعليق مؤقت (Suspend Service)</div>
+              <div class="text-[11px] text-slate-500">إيقاف معالجة الأحداث وحفظ الحالة مؤقتاً في الذاكرة</div>
+            </div>
+          </div>
+          <span class="text-xs text-amber-600 font-bold">Sleep</span>
+        </button>
+
+        <button onclick="applyKernelLifecycleAction('shutdown')" class="w-full p-3 rounded-xl bg-slate-50 hover:bg-rose-50 border border-slate-200 hover:border-rose-300 text-right transition flex items-center justify-between group">
+          <div class="flex items-center gap-3">
+            <span class="text-xl">🛑</span>
+            <div>
+              <div class="text-xs font-bold text-slate-800 group-hover:text-rose-900">إغلاق التعيين (Shut Down)</div>
+              <div class="text-[11px] text-slate-500">إيقاف جميع الخدمات المعزولة والطبقات البرمجية</div>
+            </div>
+          </div>
+          <span class="text-xs text-rose-600 font-bold">Power Off</span>
+        </button>
+      </div>
+
+      <div class="pt-2 flex justify-end">
+        <button onclick="toggleSystemLifecycleModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-300">
+          إلغاء
+        </button>
+      </div>
+    </div>
+  </div>
 
   <script>
     const __nawatFetch = window.fetch;
@@ -1249,9 +1459,178 @@ app.get('/', (_req, res) => {
       }
     }
 
+    function toggleTaskSwitcher() {
+      const menu = document.getElementById('task-switcher-menu');
+      if (menu) menu.classList.toggle('hidden');
+    }
+
+    function toggleSystemLifecycleModal() {
+      const modal = document.getElementById('system-lifecycle-modal');
+      if (modal) modal.classList.toggle('hidden');
+    }
+
+    function applyKernelLifecycleAction(action) {
+      toggleSystemLifecycleModal();
+      const statusBadge = document.getElementById('status-badge');
+      const trayKernelStatus = document.getElementById('tray-kernel-status');
+
+      if (action === 'restart') {
+        if (trayKernelStatus) {
+          trayKernelStatus.className = 'flex items-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-800 px-2.5 py-1 rounded-lg font-semibold text-[11px] shadow-2xs';
+          trayKernelStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500 animate-spin"></span><span>Rebooting...</span>';
+        }
+        setTimeout(() => {
+          if (trayKernelStatus) {
+            trayKernelStatus.className = 'flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 px-2.5 py-1 rounded-lg font-semibold text-[11px] shadow-2xs';
+            trayKernelStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span><span>Booted</span>';
+          }
+          if (statusBadge) {
+            statusBadge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200';
+            statusBadge.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span><span>النواة نشطة (Booted)</span>';
+          }
+          refreshData();
+        }, 1200);
+      } else if (action === 'suspend') {
+        if (trayKernelStatus) {
+          trayKernelStatus.className = 'flex items-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-800 px-2.5 py-1 rounded-lg font-semibold text-[11px] shadow-2xs';
+          trayKernelStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span><span>Suspended</span>';
+        }
+        if (statusBadge) {
+          statusBadge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200';
+          statusBadge.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span><span>النواة معلقة (Suspended)</span>';
+        }
+      } else if (action === 'shutdown') {
+        toggleKernelPower();
+      }
+    }
+
+    // Dynamic Memory usage simulator
+    setInterval(() => {
+      const ramEl = document.getElementById('tray-memory');
+      if (ramEl) {
+        const usage = Math.floor(240 + Math.random() * 25);
+        ramEl.innerText = usage + ' MB / 1024 MB';
+      }
+    }, 4000);
+
     function launchApp(tab) {
       const kickoff = document.getElementById('kickoff-menu');
       if (kickoff) kickoff.classList.add('hidden');
+      const switcher = document.getElementById('task-switcher-menu');
+      if (switcher) switcher.classList.add('hidden');
+      switchTab(tab);
+    }
+
+    function filterKickoffApps() {
+      const query = (document.getElementById('kickoff-search')?.value || '').toLowerCase();
+      const list = document.getElementById('kickoff-app-list');
+      if (!list) return;
+      const items = list.querySelectorAll('div[onclick]');
+      items.forEach(item => {
+        const text = item.innerText.toLowerCase();
+        item.style.display = text.includes(query) ? 'flex' : 'none';
+      });
+    }
+
+    function selectKickoffCategory(cat) {
+      const list = document.getElementById('kickoff-app-list');
+      if (!list) return;
+      const items = list.querySelectorAll('div[onclick]');
+      items.forEach(item => {
+        if (cat === 'all') {
+          item.style.display = 'flex';
+        } else {
+          const text = item.innerText.toLowerCase();
+          if (cat === 'dev' && (text.includes('arch') || text.includes('dolphin'))) item.style.display = 'flex';
+          else if (cat === 'system' && (text.includes('commands') || text.includes('event'))) item.style.display = 'flex';
+          else if (cat === 'security' && text.includes('security')) item.style.display = 'flex';
+          else if (cat === 'utilities' && (text.includes('extensions') || text.includes('debounce') || text.includes('translator'))) item.style.display = 'flex';
+          else if (cat === 'help' && text.includes('help')) item.style.display = 'flex';
+          else item.style.display = 'none';
+        }
+      });
+    }
+
+    function toggleKernelPower() {
+      isKernelBooted = !isKernelBooted;
+      const statusBadge = document.getElementById('status-badge');
+      const powerBtnText = document.getElementById('power-btn-text');
+      const trayKernelStatus = document.getElementById('tray-kernel-status');
+      
+      if (isKernelBooted) {
+        if (statusBadge) {
+          statusBadge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200';
+          statusBadge.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span><span>النواة نشطة (Booted)</span>';
+        }
+        if (trayKernelStatus) {
+          trayKernelStatus.className = 'flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 px-2.5 py-1 rounded-lg font-semibold text-[11px] shadow-2xs';
+          trayKernelStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span><span>Booted</span>';
+        }
+        if (powerBtnText) powerBtnText.innerText = 'Shutdown';
+      } else {
+        if (statusBadge) {
+          statusBadge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-200 text-slate-700 border border-slate-300';
+          statusBadge.innerHTML = '<span class="w-2 h-2 rounded-full bg-slate-400"></span><span>النواة متوقفة (Stopped)</span>';
+        }
+        if (trayKernelStatus) {
+          trayKernelStatus.className = 'flex items-center gap-1.5 bg-slate-200 border border-slate-300 text-slate-700 px-2.5 py-1 rounded-lg font-semibold text-[11px] shadow-2xs';
+          trayKernelStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-slate-400"></span><span>Off</span>';
+        }
+        if (powerBtnText) powerBtnText.innerText = 'Boot Kernel';
+      }
+    }
+
+    const appTitlesMap = {
+      'orchestrator': { title: 'Orchestrator Kernel & Tools', icon: '🎛️' },
+      'dolphin': { title: 'Dolphin File Browser', icon: '📁' },
+      'arch': { title: 'Arch Exec Layer', icon: '💻' },
+      'commands': { title: 'Commands Registry', icon: '⚡' },
+      'scan': { title: 'Security Scanner', icon: '🛡️' },
+      'extensions': { title: 'Extensions Manager', icon: '🧩' },
+      'events': { title: 'EventBus Console', icon: '📡' },
+      'scheduler': { title: 'Debounce Scheduler', icon: '⏱️' },
+      'i18n': { title: 'i18n Translator', icon: '🌐' },
+      'help': { title: 'Help & User Manual', icon: '📖' }
+    };
+
+    function switchTab(tab) {
+      const allTabs = ['orchestrator', 'dolphin', 'arch', 'commands', 'scan', 'extensions', 'events', 'scheduler', 'i18n', 'help'];
+      allTabs.forEach(t => {
+        const viewEl = document.getElementById('view-' + t);
+        if (viewEl) viewEl.classList.add('hidden');
+        const tabEl = document.getElementById('tab-' + t);
+        if (tabEl) {
+          tabEl.className = 'px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100';
+        }
+      });
+
+      const activeView = document.getElementById('view-' + tab);
+      if (activeView) activeView.classList.remove('hidden');
+
+      const tabBtn = document.getElementById('tab-' + tab);
+      if (tabBtn) {
+        if (tab === 'orchestrator') {
+          tabBtn.className = 'p-2.5 rounded-lg border text-right transition flex flex-col items-center justify-center text-center gap-1 bg-indigo-50 border-indigo-300 text-indigo-800 font-bold shadow-xs';
+        } else {
+          tabBtn.className = 'p-2.5 rounded-lg border text-right transition flex flex-col items-center justify-center text-center gap-1 bg-emerald-50 border-emerald-300 text-emerald-800 font-bold shadow-xs';
+        }
+      }
+
+      const info = appTitlesMap[tab] || { title: 'Dolphin File Browser', icon: '📁' };
+      const activeAppTitle = document.getElementById('active-app-title');
+      const activeAppIcon = document.getElementById('active-app-icon');
+      if (activeAppTitle) activeAppTitle.innerText = info.title;
+      if (activeAppIcon) activeAppIcon.innerText = info.icon;
+
+      currentTab = tab;
+      refreshData();
+    }
+
+    function launchApp(tab) {
+      const kickoff = document.getElementById('kickoff-menu');
+      if (kickoff) kickoff.classList.add('hidden');
+      const switcher = document.getElementById('task-switcher-menu');
+      if (switcher) switcher.classList.add('hidden');
       switchTab(tab);
     }
 
@@ -1325,12 +1704,88 @@ app.get('/', (_req, res) => {
         document.getElementById('metric-extensions').innerText = kData.activeExtensionsCount;
         document.getElementById('metric-scheduler').innerText = kData.activeSchedulerCount;
 
+        if (currentTab === 'orchestrator') loadDiscoveredTools();
         if (currentTab === 'commands') loadCommands();
         if (currentTab === 'events') loadEvents();
         if (currentTab === 'extensions') loadExtensions();
         if (currentTab === 'arch') loadArchHistory();
       } catch (err) {
         console.error('Refresh error:', err);
+      }
+    }
+
+    async function loadDiscoveredTools() {
+      try {
+        const res = await fetch('/api/editor/tools');
+        const data = await res.json();
+        const grid = document.getElementById('tools-grid');
+        if (!grid) return;
+        if (!data.tools || data.tools.length === 0) {
+          grid.innerHTML = '<div class="text-xs text-slate-400">لم يتم اكتشاف أدوات.</div>';
+          return;
+        }
+        grid.innerHTML = data.tools.map(t => {
+          const isAvail = t.status === 'available';
+          const statusBadge = isAvail
+            ? '<span class="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-bold">مثبت على النظام</span>'
+            : '<span class="text-[10px] bg-sky-50 text-sky-700 border border-sky-200 px-2 py-0.5 rounded-full font-bold">وكيل مجسّد</span>';
+          const langs = (t.capabilities && t.capabilities.supportedLanguages) ? t.capabilities.supportedLanguages.slice(0, 4).map(l => '<span class="bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-700 font-mono">' + l + '</span>').join('') : '';
+          return \`
+            <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2 flex flex-col justify-between">
+              <div>
+                <div class="flex items-center justify-between gap-1">
+                  <span class="text-xs font-bold text-slate-900">\${t.name}</span>
+                  \${statusBadge}
+                </div>
+                <div class="text-[11px] font-mono text-slate-500 mt-1">binary: <span class="font-bold text-slate-800">\${t.binary}</span></div>
+                <div class="text-[10px] text-slate-500 mt-0.5 truncate">path: \${t.path}</div>
+                <div class="text-[10px] text-slate-600 mt-1 flex flex-wrap gap-1">
+                  \${langs}
+                </div>
+              </div>
+              <button onclick="openFileInTool('\${t.id}')" class="w-full mt-2 py-1 bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 rounded text-xs font-semibold transition">
+                فتح الملف الرئيسي (\${t.binary})
+              </button>
+            </div>
+          \`;
+        }).join('');
+      } catch (e) {
+        console.error('Tools scan error:', e);
+      }
+    }
+
+    async function dispatchOrchestratorIntent() {
+      const intent = document.getElementById('orch-intent').value;
+      const path = document.getElementById('orch-path').value;
+      const line = Number(document.getElementById('orch-line').value) || 1;
+      const out = document.getElementById('orch-output');
+      out.innerText = 'جاري التوجيه...';
+      try {
+        const res = await fetch('/api/orchestrator/dispatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ intent, path, line })
+        });
+        const data = await res.json();
+        out.innerText = JSON.stringify(data, null, 2);
+      } catch (e) {
+        out.innerText = 'خطأ: ' + e.message;
+      }
+    }
+
+    async function openFileInTool(toolId) {
+      const path = document.getElementById('orch-path')?.value || 'server.ts';
+      const line = Number(document.getElementById('orch-line')?.value) || 1;
+      try {
+        const res = await fetch('/api/editor/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, line, toolId })
+        });
+        const data = await res.json();
+        alert('تم فتح ' + path + ':' + line + ' بنجاح عبر ' + (data.usedTool || toolId));
+      } catch (e) {
+        alert('خطأ في الفتح: ' + e.message);
       }
     }
 
