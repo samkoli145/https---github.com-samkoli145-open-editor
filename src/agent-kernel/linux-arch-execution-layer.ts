@@ -217,6 +217,12 @@ export class LinuxArchExecutionLayer {
       if (inspected.kind === 'special') {
         return denied('blocked', `EPERM: '${parsed.toolName}' is not a regular file (device/socket/fifo)`);
       }
+      if (inspected.privileged) {
+        return denied(
+          'blocked',
+          `ESECURITY: '${parsed.toolName}' is setuid/setgid (mode 0o${inspected.mode.toString(8)}): privilege escalation is prohibited`
+        );
+      }
 
       const effectivePath = inspected.realPath ?? targetPath;
 
@@ -327,6 +333,8 @@ export class LinuxArchExecutionLayer {
     exists: boolean;
     kind: 'elf' | 'script' | 'data' | 'dir' | 'special';
     executable: boolean;
+    privileged: boolean;
+    mode: number;
     interpreter?: string;
     realPath?: string;
   } {
@@ -336,11 +344,12 @@ export class LinuxArchExecutionLayer {
       realPath = lst.isSymbolicLink() ? realpathSync(targetPath) : targetPath;
       const st = statSync(realPath);
       const executable = (st.mode & 0o111) !== 0;
+      const privileged = (st.mode & 0o6000) !== 0;
       if (st.isDirectory()) {
-        return { exists: true, kind: 'dir', executable, realPath };
+        return { exists: true, kind: 'dir', executable, privileged, mode: st.mode, realPath };
       }
       if (!st.isFile()) {
-        return { exists: true, kind: 'special', executable, realPath };
+        return { exists: true, kind: 'special', executable, privileged, mode: st.mode, realPath };
       }
       const fd = openSync(realPath, 'r');
       try {
@@ -349,21 +358,21 @@ export class LinuxArchExecutionLayer {
         const head = buf.subarray(0, read);
 
         if (head.length >= 4 && head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) {
-          return { exists: true, kind: 'elf', executable, realPath };
+          return { exists: true, kind: 'elf', executable, privileged, mode: st.mode, realPath };
         }
 
         if (head.length >= 2 && head[0] === 0x23 && head[1] === 0x21) {
           const line = new TextDecoder('utf-8', { fatal: false }).decode(head).split(/\r?\n/, 1)[0] ?? '';
           const { interpreter } = parseShebang(line);
-          return { exists: true, kind: 'script', executable, interpreter, realPath };
+          return { exists: true, kind: 'script', executable, privileged, mode: st.mode, interpreter, realPath };
         }
 
-        return { exists: true, kind: 'data', executable, realPath };
+        return { exists: true, kind: 'data', executable, privileged, mode: st.mode, realPath };
       } finally {
         closeSync(fd);
       }
     } catch {
-      return { exists: false, kind: 'data', executable: false };
+      return { exists: false, kind: 'data', executable: false, privileged: false, mode: 0 };
     }
   }
 

@@ -350,4 +350,44 @@ describe('Nawat LinuxArchExecutionLayer (Arch Linux Kernel Execution Layer)', ()
       expect(layer.getHistory().map((r) => r.commandLine)).toEqual(['echo one', 'eval 1']);
     });
   });
+
+  // -------------------------------------------------------------------
+  // 9. setuid/setgid Privilege Escalation Rejection
+  // -------------------------------------------------------------------
+  describe('setuid/setgid privilege escalation rejection', () => {
+    const layer = new LinuxArchExecutionLayer();
+
+    const suidScript = join(TMP, 'suid-tool.sh');
+    const sgidElf = join(TMP, 'sgid-tool.elf');
+    const normalScript = join(TMP, 'normal-tool.sh');
+
+    beforeAll(() => {
+      mkdirSync(TMP, { recursive: true });
+      writeFileSync(suidScript, '#!/usr/bin/env python3\nprint("suid")\n');
+      chmodSync(suidScript, 0o4755);
+      writeFileSync(sgidElf, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]));
+      chmodSync(sgidElf, 0o2755);
+      writeFileSync(normalScript, '#!/usr/bin/env python3\nprint("normal")\n');
+      chmodSync(normalScript, 0o755);
+    });
+
+    it('denies a setuid (SUID) executable as privilege escalation', async () => {
+      const res = await layer.execute({ commandLine: './suid-tool.sh', cwd: TMP });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('setuid/setgid');
+      expect(res.reason).toContain('privilege escalation');
+    });
+
+    it('denies a setgid (SGID) executable as privilege escalation', async () => {
+      const res = await layer.execute({ commandLine: './sgid-tool.elf', cwd: TMP });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('setuid/setgid');
+    });
+
+    it('still allows a regular non-setuid executable', async () => {
+      const res = await layer.execute({ commandLine: './normal-tool.sh', cwd: TMP });
+      expect(res.status).toBe('success');
+      expect(res.stdout).toContain('normal');
+    });
+  });
 });
