@@ -8,7 +8,8 @@ import {
   PROFILES,
   NawatRuntime,
   VirtualFileSystem,
-  loadConfigFile
+  loadConfigFile,
+  HermesKernel
 } from '../src/index';
 
 describe('Host Layer & Bootloader (محمل الإقلاع والطبقة المستضيفة)', () => {
@@ -73,6 +74,44 @@ describe('Host Layer & Bootloader (محمل الإقلاع والطبقة الم
       expect(bootloader.agentKernel).toBeDefined();
       expect(bootloader.hermes).toBeDefined();
       expect(bootloader.editor).toBeDefined();
+
+      await bootloader.shutdown();
+    });
+  });
+
+  describe('Real Kernel Binding (integration)', () => {
+    it('editor profile binds a real HermesKernel (not a mock)', async () => {
+      const bootloader = new Bootloader({ profile: 'editor' });
+      const runtime = await bootloader.boot();
+
+      expect(bootloader.hermes).toBeDefined();
+      expect(bootloader.hermes!.kernel).toBeInstanceOf(HermesKernel);
+
+      const serveRes = await bootloader.hermes!.serve('hello', 'echo', { message: 'real-hermes' });
+      expect(serveRes.isOk).toBe(true);
+      if (serveRes.isOk) {
+        expect(serveRes.value.result).toBe('real-hermes');
+      }
+
+      const learnRes = await runtime.executeCommand('hermes.learn', { topic: 'intro-to-security' });
+      expect(learnRes.output).toBe('Hermes learned: intro-to-security');
+
+      await bootloader.shutdown();
+    });
+
+    it('agent profile binds a real LLM-based agent kernel (not a mock)', async () => {
+      const bootloader = new Bootloader({ profile: 'agent' });
+      const runtime = await bootloader.boot();
+
+      expect(bootloader.agentKernel).toBeDefined();
+      expect(bootloader.agentKernel!.llm).toBeDefined();
+
+      const chatOut = await bootloader.agentKernel!.chat('hello-agent');
+      expect(typeof chatOut).toBe('string');
+      expect(chatOut.length).toBeGreaterThan(0);
+
+      const cmdRes = await runtime.executeCommand('agent.llm.chat', { msg: 'how are you' });
+      expect(cmdRes.output).toBeTruthy();
 
       await bootloader.shutdown();
     });

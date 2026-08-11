@@ -4,6 +4,11 @@ import { NawatRuntime, type RuntimeState } from './runtime';
 import { PROFILES, type ProfileName, type ProfileConfig } from './profiles';
 import { VirtualFileSystem } from './vfs';
 import { loadConfigFile, type HostConfigFile } from './config-loader';
+import { HermesKernel } from '../agent-kernel/hermes/hermes-kernel';
+import { ToolRegistry } from '../agent-kernel/tools';
+import { SafeStorageEngine } from '../agent-kernel/storage';
+import { LLMCore, DeterministicBackend } from '../agent-kernel/llm-core';
+import { SessionManager } from '../agent-kernel/session';
 
 export interface BootOptions {
   profile?: ProfileName;
@@ -113,19 +118,47 @@ export class Bootloader {
 
       const subsystems: { agentKernel?: any; hermes?: any; editor?: any } = {};
 
+      // نواة وكيل حقيقية (بدل mock): LLMCore + ToolRegistry + SessionManager
       if (this._profileConfig.enableAgentKernel) {
+        const llm = new LLMCore({
+          backends: [new DeterministicBackend({
+            defaultResponse: 'Deterministic response from local agent'
+          })]
+        });
         subsystems.agentKernel = {
           name: 'AgentKernel',
           status: 'active',
-          chat: async (msg: string) => `Agent response to: ${msg}`
+          llm,
+          toolRegistry: new ToolRegistry(),
+          sessions: new SessionManager(),
+          chat: async (msg: string): Promise<string> => {
+            const res = await llm.chat([{ role: 'user', content: String(msg ?? '') }]);
+            return res.isOk ? res.value.content : `Agent error: ${res.error.message}`;
+          }
         };
       }
 
+      // نواة هيرمس حقيقية (HermesKernel) بدل mock — تعريض serve/learn عبر البوابة
       if (this._profileConfig.enableHermes) {
+        const hermesKernel = new HermesKernel(new ToolRegistry(), new SafeStorageEngine());
         subsystems.hermes = {
           name: 'Hermes',
           status: 'active',
-          learn: async (topic: string) => `Hermes learned: ${topic}`
+          kernel: hermesKernel,
+          serve: (input: string, toolName?: string, toolArgs?: any) =>
+            hermesKernel.serve(input, toolName, toolArgs),
+          learn: async (topic: string): Promise<string> => {
+            const res = await hermesKernel.learn({
+              sessionId: 'boot',
+              materials: [{
+                id: `boot_${Date.now()}`,
+                type: 'fact',
+                content: String(topic ?? ''),
+                priority: 'normal'
+              }]
+            });
+            return res.isOk ? `Hermes learned: ${topic}` : `Hermes error: ${res.error.message}`;
+          }
         };
       }
 
@@ -164,7 +197,13 @@ export class Bootloader {
           title: { ar: 'محادثة الوكيل', en: 'Agent LLM Chat' },
           category: { ar: 'الوكيل', en: 'Agent' },
           description: { ar: 'إرسال استعلام للوكيل الذكي', en: 'Send query to local agent' },
-          handler: (p: any) => ({ output: `Agent response for: ${JSON.stringify(p)}` })
+          handler: async (p: any) => {
+            const agent = this.agentKernel;
+            if (!agent?.chat) return { output: 'Agent unavailable' };
+            const msg = typeof p === 'string' ? p : (p?.msg ?? p?.message ?? '');
+            const output = await agent.chat(msg);
+            return { output };
+          }
         });
       }
 
@@ -174,7 +213,13 @@ export class Bootloader {
           title: { ar: 'تعلم هيرمس', en: 'Hermes Learn' },
           category: { ar: 'هيرمس', en: 'Hermes' },
           description: { ar: 'إضافة مادة تعليمية جديدة', en: 'Add training material' },
-          handler: (p: any) => ({ output: `Hermes topic added: ${JSON.stringify(p)}` })
+          handler: async (p: any) => {
+            const hermes = this.hermes;
+            if (!hermes?.learn) return { output: 'Hermes unavailable' };
+            const topic = typeof p === 'string' ? p : (p?.topic ?? '');
+            const output = await hermes.learn(topic);
+            return { output };
+          }
         });
       }
 

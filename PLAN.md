@@ -68,7 +68,7 @@ bin/nawat.ts (71) · server.ts (703) · tests/ (10 ملفات · 166 اختبا�
 
 ## 4. المتبقي (Remaining)
 
-1. **ربط حقيقي للنواة العليا/هيرمس في المستضيف** — `bootloader.initializeKernel` يبني حالياً «أشباحاً» (stubs) لـ`agentKernel`/`hermes`/`editor` بدل ربط `HermesKernel`/`AgentKernel` الحقيقية (راجع §5-أ).
+1. ~~**ربط حقيقي للنواة العليا/هيرمس في المستضيف** — `bootloader.initializeKernel` يبني حالياً «أشباحاً» (stubs) لـ`agentKernel`/`hermes`/`editor` بدل ربط `HermesKernel`/`AgentKernel` الحقيقية (راجع §5-أ).~~ **تم** — ربط `HermesKernel` + نواة وكيل حقيقية (LLMCore/ToolRegistry/SessionManager) في `initializeKernel` (§5-أ).
 2. **VFS وظيفية في المستضيف** — `host/vfs.ts` mount/dispose فقط؛ VFS الحقيقية في `system/vfs` غير موصولة.
 3. **Ollama حقيقي** — `OllamaBackend.chat` يرد بمحاكاة وليس عبر `fetch` إلى ollama؛ تعطيل المحاكاة عند توفر نموذج.
 4. **اختبارات E2E** — `server.ts` (REST/لوحة) و`bin/nawat.ts` بلا اختبارات.
@@ -83,7 +83,7 @@ bin/nawat.ts (71) · server.ts (703) · tests/ (10 ملفات · 166 اختبا�
 
 | # | الملاحظة | الموضع | المقترح |
 |---|---|---|---|
-| أ | المستضيف يبني أشباحاً بدل الأنظمة الحقيقية: `chat: async (msg) => \`Agent response to: ${msg}\`` | `host/bootloader.ts:114-139` | ربط `HermesKernel`/`ToolRegistry`/`SessionManager` الحقيقية في `initializeKernel` وتفعيلها عبر الأنماط |
+| أ | ~~المستضيف يبني أشباحاً بدل الأنظمة الحقيقية: `chat: async (msg) => \`Agent response to: ${msg}\``~~ **✅ عولج** — ربط حقيقي في `initializeKernel`: `HermesKernel` (ToolRegistry + SafeStorageEngine) عند `enableHermes`، ونواة وكيل حقيقية عبر `LLMCore` (DeterministicBackend) + `ToolRegistry` + `SessionManager` عند `enableAgentKernel`؛ بوابتا `serve`/`learn`/`chat` ووصلا الأوامر `hermes.learn` و`agent.llm.chat` للنواة الحقيقية | `host/bootloader.ts` | **تم** — اختباران (editor: `kernel instanceof HermesKernel` + serve/learn حقيقيان · agent: chat عبر LLMCore) · **182/182** |
 | ب | `signalingLatencyMs` مُرمَّز 0.8 (ثابت) | `host/runtime.ts:111` | قياس فعلي (performance.now حول syscall/executeCommand) |
 | ج | `OllamaBackend.chat` محاكاة لا اتصال | `agent-kernel/llm-core.ts:42-56` | `fetch` حقيقي إلى `{baseUrl}/api/chat`، والمحاكاة fallback فقط عند فشل الاتصال |
 | د | `SafeStorageEngine.save` يكتب المفتاح مرتين (خام + مُنقّى) | `system/storage.ts:74-75` | كتابة المفتاح المُنقّى فقط + تحديث `exists/delete/load` عليه |
@@ -115,4 +115,5 @@ bin/nawat.ts (71) · server.ts (703) · tests/ (10 ملفات · 166 اختبا�
 | اليوم | مراجعة التحديثات · تحديث `kernel.md` للهيكل الجديد · توثيق الحالة | `tsc` نظيف · `build` نظيف · **127/127** |
 | اليوم | طبقة `LinuxArchExecutionLayer` (تنفيذ حقيقي + بوابات أرش) · دعم الملفات المجهولة (shebang/ثنائي مجهول) · تحصين الملفات المخفية (جذر realpath · Unicode · devices · dotfiles) | `tsc` نظيف · **166/166** |
 | اليوم | دمج الطبقة في `server.ts`: `/api/arch/execute` + `/api/arch/history` + `/api/arch/status` + تبويب لوحة (RTL) — اختُبرت E2E بالـcurl | `tsc` نظيف · `build` نظيف · curl: allowed/blocked/audit ✓ |
+| اليوم | **ربط حقيقي للنواة العليا/هيرمس في المستضيف** — استبدال الأشباح في `bootloader.initializeKernel`: `HermesKernel` حقيقي (enableHermes) + نواة وكيل عبر `LLMCore`/`ToolRegistry`/`SessionManager` (enableAgentKernel)؛ الأوامر `hermes.learn`/`agent.llm.chat` توصل النواة الحقيقية | `tsc` نظيف · **182/182** · اختباران: `instanceof HermesKernel` + serve/learn/chat عبر نواة حقيقية |
 | اليوم | **ماسح المشروع الخارجي** `scanProject` (مخفي/قابل تنفيذ/setuid/هروب/مزروع/معبث/مفقود) + `/api/projects/scan` + تبويب لوحة — E2E بالـcurl ✓ · سُجّلت فجوات أمنية §5 (ن→ف) | `tsc` نظيف · `build` نظيف · **172/172** · curl: 6 فئات إيجابية + baseline tampered ✓ |
