@@ -1,0 +1,6 @@
+{
+  "name": "Nawat Kernel",
+  "description": "Smart modular software kernel with service container, command registry, event bus, and scheduler.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

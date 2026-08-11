@@ -1,0 +1,32 @@
+{
+  "name": "open-editor",
+  "version": "0.1.0",
+  "description": "Open Editor — محرر كود معياري ذكي (نواة + عقل + منطق) كنموذج مستقل قابل للنشر",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "start": "node dist/server.cjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.13.3",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.12",
+    "typescript": "~5.8.2",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@google/genai": "^2.16.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  }
+}
