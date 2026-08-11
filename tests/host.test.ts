@@ -13,7 +13,8 @@ import {
   ToolRegistry,
   CommandRegistry,
   SessionManager,
-  ResourceQuotaGuard
+  ResourceQuotaGuard,
+  AgentSyscall
 } from '../src/index';
 
 describe('Host Layer & Bootloader (محمل الإقلاع والطبقة المستضيفة)', () => {
@@ -260,6 +261,28 @@ describe('Host Layer & Bootloader (محمل الإقلاع والطبقة الم
       expect(typeof res).toBe('object');
       expect(['success', 'blocked', 'error']).toContain(res.status);
       expect(typeof res.output).toBe('string');
+
+      await bootloader.shutdown();
+    });
+
+    it('leaves no stale pendingSyscalls entry even when a foreign queued syscall is dequeued', async () => {
+      const bootloader = new Bootloader({ profile: 'agent' });
+      const runtime = await bootloader.boot();
+
+      runtime.kernel.getContext().commands.register({
+        id: 'leak.cmd',
+        title: { ar: 'تسرب', en: 'Leak' },
+        category: { ar: 'مؤقت', en: 'Temp' },
+        description: { ar: '', en: '' },
+        handler: (payload: any) => ({ ok: payload })
+      });
+
+      const foreign = new AgentSyscall({ name: 'leak.cmd', payload: 'foreign', owner: 'test' });
+      runtime.syscallQueue.enqueue(foreign);
+
+      const res = await runtime.executeSyscall('leak.cmd', 'mine');
+      expect((res as any).ok).toBe('foreign');
+      expect(runtime.pendingSyscalls.size).toBe(0);
 
       await bootloader.shutdown();
     });

@@ -174,6 +174,7 @@ export class NawatRuntime {
 
           currentSyscall.markCompleted(result);
           this.pendingSyscalls.delete(currentSyscall.id);
+          this.pendingSyscalls.delete(syscall.id);
           this.kernel.getContext().events.emit('syscall:executed', {
             id: currentSyscall.id,
             name: sysName,
@@ -186,6 +187,7 @@ export class NawatRuntime {
           const error = err instanceof Error ? err : new Error(String(err));
           currentSyscall.markFailed(error);
           this.pendingSyscalls.delete(currentSyscall.id);
+          this.pendingSyscalls.delete(syscall.id);
           reject(error);
         }
       }).catch(() => {});

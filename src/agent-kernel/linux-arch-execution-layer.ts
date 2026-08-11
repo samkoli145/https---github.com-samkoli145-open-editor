@@ -138,7 +138,7 @@ export class LinuxArchExecutionLayer {
       const token = tokens[i];
       if (token.startsWith('-')) {
         flags.push(token);
-      } else if (!subCommand && i === 1 && !token.startsWith('/')) {
+      } else if (!subCommand && i === 1 && !token.startsWith('/') && !token.includes('/')) {
         subCommand = token;
       } else {
         targets.push(token);
@@ -223,16 +223,20 @@ export class LinuxArchExecutionLayer {
       cwd = effectiveRoot;
     }
 
-    // عزل الأهداف المطلقة (data-domain): منع الأوامر المسموحة من لمس مسارات مطلقة خارج الجذر
-    // (مثل: cat /etc/shadow · rm /etc/x · find / -name passwd) بينما تبقى النسبية داخل الجذر مسموحة.
+    // عزل الأهداف (data-domain): منع الأوامر المسموحة من لمس مسارات خارج الجذر — المطلقة
+    // (cat /etc/shadow · rm /etc/x) والنسبية العابرة عبر `..` (cat ../etc/passwd من عمق داخل
+    // الجذر) — بينما تبقى النسبية داخل الجذر مسموحة.
     if (this.isolateAbsoluteTargets) {
       for (const target of parsed.targets) {
-        if (!target.startsWith('/')) continue;
+        const isAbsolute = target.startsWith('/');
+        const isRelativeEscape = !isAbsolute && target.split('/').includes('..');
+        if (!isAbsolute && !isRelativeEscape) continue;
+        const candidate = isAbsolute ? target : resolve(cwd ?? effectiveRoot, target);
         let resolved: string;
         try {
-          resolved = realpathSync(target);
+          resolved = realpathSync(candidate);
         } catch {
-          resolved = resolve(target);
+          resolved = resolve(candidate);
         }
         if (resolved !== effectiveRoot && !resolved.startsWith(rootPrefix)) {
           return denied('blocked', `ESECURITY: target '${target}' resolves outside the execution root`);

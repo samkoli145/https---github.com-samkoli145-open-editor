@@ -438,6 +438,21 @@ describe('Nawat LinuxArchExecutionLayer (Arch Linux Kernel Execution Layer)', ()
       const res = await isolated.execute({ commandLine: 'touch rooted-file.txt', cwd: TMP });
       expect(res.status).toBe('success');
     });
+
+    it('denies a relative target escaping the exec root via .. traversal', async () => {
+      const parentOutside = join(TMP, '..', `nawat-parent-outside-${Date.now()}.txt`);
+      writeFileSync(parentOutside, 'secret');
+      const res = await isolated.execute({ commandLine: `cat ../${parentOutside.split('/').pop()}`, cwd: TMP });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('resolves outside the execution root');
+    });
+
+    it('allows a relative .. target that stays inside the exec root', async () => {
+      const inRoot = join(TMP, 'in-root.txt');
+      writeFileSync(inRoot, 'inside');
+      const res = await isolated.execute({ commandLine: 'cat in-root.txt', cwd: TMP });
+      expect(res.status).toBe('success');
+    });
   });
 
   // -------------------------------------------------------------------
