@@ -984,11 +984,11 @@ app.get('/', (_req, res) => {
         const text =
           'verdict: ' + data.verdict + '  |  status: ' + data.status + '  |  exitCode: ' + data.exitCode +
           '  |  time: ' + data.executionTimeMs + 'ms' +
-          (data.reason ? '\nreason: ' + data.reason : '') +
-          (data.warnings && data.warnings.length ? '\nwarnings:\n' + data.warnings.join('\n') : '') +
-          '\nstdout:\n' + data.stdout +
-          '\nstderr:\n' + data.stderr +
-          '\nsummary.ar: ' + (data.summary?.ar || '');
+          (data.reason ? '\\nreason: ' + data.reason : '') +
+          (data.warnings && data.warnings.length ? '\\nwarnings:\\n' + data.warnings.join('\\n') : '') +
+          '\\nstdout:\\n' + data.stdout +
+          '\\nstderr:\\n' + data.stderr +
+          '\\nsummary.ar: ' + (data.summary?.ar || '');
         document.getElementById('arch-result').innerText = text;
         loadArchHistory();
       } catch (err) {
@@ -1088,7 +1088,7 @@ app.get('/', (_req, res) => {
           if (f.kind === 'ok' || f.kind === 'hidden' || f.kind === 'executable' || f.kind === 'outside_link') continue;
           lines.push('  [' + f.kind + '] ' + f.path + ' — ' + f.detail);
         }
-        document.getElementById('scan-result').innerText = lines.join('\n');
+        document.getElementById('scan-result').innerText = lines.join('\\n');
       } catch (err) {
         document.getElementById('scan-result').innerText = 'خطأ: ' + err.message;
       }
