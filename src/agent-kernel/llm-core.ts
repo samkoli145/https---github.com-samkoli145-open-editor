@@ -1,9 +1,15 @@
 import { Result, ok, err } from '../kernel/core/result';
 import type { LocalLLMServerInfo } from './local-server-discovery';
+import type { InferenceGovernor } from './inference-governor';
 
 export interface LLMMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+}
+
+export interface LLMChatOptions {
+  /** مدة إبقاء النموذج في الذاكرة (keep_alive) عبر حاكم الاستدلال */
+  keepAlive?: string | number;
 }
 
 export interface LLMReply {
@@ -20,7 +26,7 @@ export interface LLMReply {
 export interface ILLMBackend {
   name: string;
   model: string;
-  chat(messages: LLMMessage[]): Promise<Result<LLMReply, Error>>;
+  chat(messages: LLMMessage[], options?: LLMChatOptions): Promise<Result<LLMReply, Error>>;
 }
 
 export interface OllamaBackendOptions {
@@ -50,16 +56,20 @@ export class OllamaBackend implements ILLMBackend {
     this.simulateOnFailure = options.simulateOnFailure ?? true;
   }
 
-  public async chat(messages: LLMMessage[]): Promise<Result<LLMReply, Error>> {
+  public async chat(messages: LLMMessage[], options: LLMChatOptions = {}): Promise<Result<LLMReply, Error>> {
     const fetchImpl = this.fetchImpl ?? globalThis.fetch;
     if (typeof fetchImpl === 'function') {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
+        const body: Record<string, unknown> = { model: this.model, messages, stream: false };
+        if (options.keepAlive !== undefined) {
+          body.keep_alive = options.keepAlive;
+        }
         const res = await fetchImpl(`${this.baseUrl}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: this.model, messages, stream: false }),
+          body: JSON.stringify(body),
           signal: controller.signal,
         });
         if (!res.ok) {
@@ -125,7 +135,7 @@ export class DeterministicBackend implements ILLMBackend {
     this.defaultResponse = options.defaultResponse || 'Deterministic response';
   }
 
-  public async chat(messages: LLMMessage[]): Promise<Result<LLMReply, Error>> {
+  public async chat(messages: LLMMessage[], _options: LLMChatOptions = {}): Promise<Result<LLMReply, Error>> {
     const lastMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
     const answer = this.responses[lastMsg] || this.defaultResponse;
 
@@ -140,6 +150,8 @@ export class DeterministicBackend implements ILLMBackend {
 export interface LLMCoreOptions {
   backends?: ILLMBackend[];
   defaultModel?: string;
+  /** حاكم موارد الاستدلال — يُفعَّل عند حقنه فقط (لا يغيّر السلوك الافتراضي) */
+  governor?: InferenceGovernor;
 }
 
 export interface DiscoveredBackendOptions {
@@ -176,11 +188,13 @@ export function backendsFromDiscoveredServers(
 
 export class LLMCore {
   private backends: ILLMBackend[];
+  private governor?: InferenceGovernor;
 
   constructor(options: LLMCoreOptions = {}) {
     this.backends = options.backends && options.backends.length > 0
       ? options.backends
       : [new OllamaBackend()];
+    this.governor = options.governor;
   }
 
   /** قائمة خلفيات LLM المتاحة (اسم + نموذج) */
@@ -201,23 +215,40 @@ export class LLMCore {
     return false;
   }
 
-  public async chat(messages: LLMMessage[]): Promise<Result<LLMReply, Error>> {
+  public async chat(messages: LLMMessage[], options: LLMChatOptions = {}): Promise<Result<LLMReply, Error>> {
     if (this.backends.length === 0) {
       return err(new Error('ENOENT: No LLM backends registered'));
     }
 
+    let lastError: Error | undefined;
+
     // Try primary backend first, fallback to next if available
     for (const backend of this.backends) {
       try {
-        const res = await backend.chat(messages);
-        if (res.isOk) {
-          return res;
+        // بوابة حاكم الاستدلال: قفل أحادي + فحص VRAM قبل النفاذ
+        if (this.governor) {
+          const acquireRes = await this.governor.acquireInferenceSlot(backend.model);
+          if (acquireRes.isErr) {
+            lastError = acquireRes.error;
+            continue;
+          }
+          const release = acquireRes.value;
+          try {
+            const res = await backend.chat(messages, { keepAlive: this.governor.getKeepAliveParam() });
+            if (res.isOk) return res;
+          } finally {
+            release();
+          }
+        } else {
+          const res = await backend.chat(messages, options);
+          if (res.isOk) return res;
         }
       } catch (e: any) {
+        lastError = e instanceof Error ? e : new Error(String(e));
         // continue to next backend
       }
     }
 
-    return err(new Error('EEXEC: All LLM backends failed to generate a response'));
+    return err(lastError ?? new Error('EEXEC: All LLM backends failed to generate a response'));
   }
 }

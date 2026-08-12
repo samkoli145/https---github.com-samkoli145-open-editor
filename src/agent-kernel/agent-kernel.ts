@@ -2,6 +2,7 @@ import { Result, ok, err } from '../kernel/core/result';
 import { LocalizedString } from '../kernel/i18n/localized-string';
 import { Kernel } from '../kernel/kernel';
 import { LLMCore, LLMMessage, LLMReply, ILLMBackend } from './llm-core';
+import { InferenceGovernor } from './inference-governor';
 import { ToolRegistry } from './tools';
 import { AgentRegistry, RegisterAgentParams } from './registry';
 import { AccessManager, AccessPolicy, PolicySummary } from './access';
@@ -23,6 +24,7 @@ export interface AgentCommandSpec {
 export interface AgentKernelOptions {
   backends?: ILLMBackend[];
   llm?: LLMCore;
+  governor?: InferenceGovernor;
   tools?: ToolRegistry;
   registry?: AgentRegistry;
   access?: AccessManager;
@@ -116,7 +118,7 @@ export class AgentKernel {
 
   constructor(options: AgentKernelOptions = {}) {
     this.defaultAgentId = options.defaultAgentId ?? DEFAULT_AGENT_ID;
-    this.llm = options.llm ?? new LLMCore({ backends: options.backends });
+    this.llm = options.llm ?? new LLMCore({ backends: options.backends, governor: options.governor });
     this.tools = options.tools ?? new ToolRegistry();
     this.registry = options.registry ?? new AgentRegistry();
     this.access = options.access ?? new AccessManager();

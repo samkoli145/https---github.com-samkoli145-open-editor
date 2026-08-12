@@ -35,6 +35,8 @@ export type { SessionState, SessionMessage, SessionStreamHandler } from './sessi
 
 export { ResourceQuotaGuard } from './quota';
 export type { ResourceQuota, AgentResourceUsage } from './quota';
+export { InferenceGovernor, InferenceMutex, DefaultResourceProbe } from './inference-governor';
+export type { InferenceGovernorOptions, ResourceProbe } from './inference-governor';
 
 export { LinuxArchExecutionLayer } from './linux-arch-execution-layer';
 export type { LinuxCommandRequest, LinuxCommandResult, LinuxArchExecutionLayerOptions, ParsedCommand, LinuxArchStatus, LinuxArchRecord } from './linux-arch-execution-layer';

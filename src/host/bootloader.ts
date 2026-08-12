@@ -10,6 +10,7 @@ import { ToolRegistry } from '../agent-kernel/tools';
 import { SafeStorageEngine } from '../agent-kernel/storage';
 import { LLMCore, DeterministicBackend, backendsFromDiscoveredServers, type ILLMBackend } from '../agent-kernel/llm-core';
 import { discoverLocalLLMServers, type LocalLLMServerInfo, type LocalServerDiscoveryOptions } from '../agent-kernel/local-server-discovery';
+import { InferenceGovernor, DefaultResourceProbe } from '../agent-kernel/inference-governor';
 import { SessionManager } from '../agent-kernel/session';
 import { ResourceQuotaGuard } from '../agent-kernel/quota';
 import { EditorManager } from './editor-manager';
@@ -146,11 +147,19 @@ export class Bootloader {
           defaultResponse: 'Deterministic response from local agent'
         })];
         const enableDiscovery = this.options.enableLLMDiscovery ?? this._profileConfig.enableLLMDiscovery;
+        let governor: InferenceGovernor | undefined;
         if (enableDiscovery) {
           try {
             const discovered = await discoverLocalLLMServers(this.options.llmDiscovery ?? {});
             this._llmServers = discovered;
-            backends.push(...backendsFromDiscoveredServers(discovered));
+            const discoveredBackends = backendsFromDiscoveredServers(discovered);
+            backends.push(...discoveredBackends);
+            // حاكم موارد الاستدلال: يفعَّل فقط عند وجود خلفيات Ollama حقيقية مكتشفة
+            if (discoveredBackends.length > 0) {
+              const first = discoveredBackends[0];
+              const baseUrl = (first as unknown as { baseUrl?: string }).baseUrl ?? 'http://127.0.0.1:11434';
+              governor = new InferenceGovernor(new DefaultResourceProbe(), { baseUrl });
+            }
           } catch {
             // الاكتشاف اختياري؛ فشله لا يُسقط الإقلاع
           }
@@ -162,6 +171,7 @@ export class Bootloader {
           quota: quotaGuard,
           sessions,
           storage: new SafeStorageEngine(),
+          governor,
         });
         await agentKernel.boot();
         agentKernel.attach(this._kernel);

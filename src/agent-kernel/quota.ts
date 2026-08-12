@@ -5,6 +5,10 @@ export interface ResourceQuota {
   maxSyscallsPerMinute?: number;
   maxErrorThreshold?: number;
   maxExecutionTimeMs?: number;
+  /** سقف استهلاك ذاكرة الكارت (VRAM) المدمج مع InferenceGovernor */
+  maxVramUsageMb?: number;
+  /** حد الاستدلالات المتزامنة (مدمج مع InferenceMutex) */
+  maxConcurrentInference?: number;
 }
 
 export interface AgentResourceUsage {
@@ -92,6 +96,15 @@ export class ResourceQuotaGuard {
       return err(new Error(`EKILLED: Agent '${agentId}' terminated due to exceeding error threshold (${quota.maxErrorThreshold})`));
     }
 
+    return ok(undefined);
+  }
+
+  /** حصة الاستدلال: رفض طلب يتجاوز سقف VRAM المعيَّن للوكيل (لا يؤثر على السلوك الافتراضي) */
+  public checkInferenceQuota(agentId: string, vramMb: number): Result<void, Error> {
+    const quota = this.quotas.get(agentId) || this.defaultQuota;
+    if (quota.maxVramUsageMb && vramMb > quota.maxVramUsageMb) {
+      return err(new Error(`EVRAM_QUOTA: Agent '${agentId}' requested ${vramMb}MB VRAM exceeding quota (${quota.maxVramUsageMb}MB)`));
+    }
     return ok(undefined);
   }
 
