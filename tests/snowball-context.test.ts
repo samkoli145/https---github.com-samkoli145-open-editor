@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildSnowballContext, SessionInstance, SessionManager, type SnowballKnowledgeItem } from '../src/agent-kernel/session';
 import { KnowledgeLayer, SOURCE_RELIABILITY_WEIGHTS, PROMOTION_THRESHOLD, MAX_KNOWLEDGE_RECORDS } from '../src/host/snowball/knowledge-layer';
+import type { KnowledgeEntry } from '../src/host/snowball/types';
 import { SafeSystemStorageEngine } from '../src/system/storage';
 
 describe('Snowball Context Injection (§4-7 / Cloud Guidelines)', () => {
@@ -119,6 +120,24 @@ describe('KnowledgeLayer Source Reliability & Eviction (§4-7 / Cloud Guidelines
       expect(lower.value.confidence).toBeGreaterThanOrEqual(0.99);
       expect(lower.value.accessCount).toBe(2);
     }
+  });
+
+  it('calculates exponential time decay: half-life 7 days halves the score', () => {
+    const now = Date.now();
+    const halfLifeMs = 7 * 24 * 3600 * 1000;
+    const fresh: KnowledgeEntry = {
+      id: 'fresh-1', tier: 'pattern', key: 'fresh_fact', confidence: 0.9, source: 'user',
+      data: {}, accessCount: 10, lastAccessed: now, createdAt: now, updatedAt: now, tags: []
+    };
+    const old: KnowledgeEntry = {
+      id: 'old-1', tier: 'pattern', key: 'old_fact', confidence: 0.9, source: 'user',
+      data: {}, accessCount: 10, lastAccessed: now - halfLifeMs, createdAt: now - halfLifeMs, updatedAt: now - halfLifeMs, tags: []
+    };
+    const freshScore = layer.calculateEntryScore(fresh, now);
+    const oldScore = layer.calculateEntryScore(old, now);
+    expect(freshScore).toBeCloseTo(9.0, 1);
+    expect(oldScore).toBeCloseTo(4.5, 1);
+    expect(freshScore).toBeGreaterThan(oldScore);
   });
 
   it('protects pinned entries from eviction and evicts lowest score on overflow', async () => {
