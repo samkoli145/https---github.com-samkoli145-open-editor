@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, realpathSync, statSync, existsSync } from 'node:fs';
 import {
   bootNawat,
@@ -42,7 +42,10 @@ async function startServer() {
   app.use(express.json());
 
   // Boot Kernel via Host Bootloader
-  const bootResult = await bootNawat({ profile: 'editor' });
+  const bootResult = await bootNawat({
+    profile: 'editor',
+    enableLLMDiscovery: ['1', 'true'].includes(String(process.env.NAWAT_LLM_DISCOVERY || '').toLowerCase()),
+  });
   if (!bootResult.isOk) {
     throw bootResult.error;
   }
@@ -63,11 +66,19 @@ async function startServer() {
   });
 
   // المصادقة الإلزامية: كل مسار /api يتطلب X-API-Key (يمنع الوصول الشبكي الخارجي حتى لو رُبط على 0.0.0.0)
+  // مقارنة ثابتة الزمن (timingSafeEqual) لمنع هجمات التوقيت على المفتاح.
+  const apiKeyMatches = (header: string | string[] | undefined): boolean => {
+    if (typeof header !== 'string') return false;
+    const provided = Buffer.from(header);
+    const expected = Buffer.from(API_KEY);
+    if (provided.length !== expected.length) return false;
+    return timingSafeEqual(provided, expected);
+  };
   app.use('/api', (req, res, next) => {
     if (req.path === '/health') {
       return next();
     }
-    if (req.headers['x-api-key'] !== API_KEY) {
+    if (!apiKeyMatches(req.headers['x-api-key'])) {
       return res.status(401).json({ error: 'E401: missing or invalid X-API-Key' });
     }
     next();
@@ -257,6 +268,7 @@ app.post('/api/commands/register', (req, res) => {
       })
     });
     context.events.emit('command:registered', { id, timestamp: Date.now() });
+    audit('commands.register', `id='${id}' category='${categoryAr || 'مخصص'}'`);
     res.json({ success: true, message: `Command ${id} registered.` });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -277,6 +289,7 @@ app.post('/api/events/emit', (req, res) => {
     return res.status(400).json({ error: 'Event name is required' });
   }
   context.events.emit(name, payload ?? {});
+  audit('events.emit', `name='${name}'`);
   res.json({ success: true, message: `Event '${name}' emitted.` });
 });
 
@@ -319,6 +332,7 @@ app.post('/api/extensions/activate', async (req, res) => {
   
   const result = await context.extensions.activate(ext);
   if (result.isOk) {
+    audit('extensions.activate', `id='${id}' version='${version || '1.0.0'}'`);
     res.json({ success: true, message: `Extension ${id} activated.` });
   } else {
     res.status(400).json({ error: result.error.message });
@@ -330,6 +344,7 @@ app.post('/api/extensions/deactivate', async (req, res) => {
   if (!id) return res.status(400).json({ error: 'Extension id required' });
   const result = await context.extensions.deactivate(id);
   if (result.isOk) {
+    audit('extensions.deactivate', `id='${id}'`);
     res.json({ success: true, message: `Extension ${id} deactivated.` });
   } else {
     res.status(400).json({ error: result.error.message });
@@ -426,7 +441,7 @@ app.post('/api/v1/chat/completions', async (req, res) => {
         : `Hermes executed: ${userPrompt}`;
     } else {
       // Fallback عبر LLMCore الحقيقي (chat — لا generateResponse)
-      const llm = runtime.agentKernel?.llmCore ||
+      const llm = runtime.agentKernel?.llm ||
         new LLMCore({ backends: [new DeterministicBackend()] });
       const llmRes = await llm.chat([{ role: 'user', content: userPrompt }]);
       content = llmRes.isOk ? llmRes.value.content : `Response to: ${userPrompt}`;
@@ -621,15 +636,6 @@ app.get('/api/launcher/programs', (_req, res) => {
       running: launcherManager.getProcesses().some(p => p.programId === 'code-server'),
       type: 'web',
       webPort: 8080
-    },
-    {
-      id: 'terminal',
-      name: 'Linux Arch Terminal Shell',
-      icon: '💻',
-      binaryPath: '/bin/bash',
-      args: [],
-      running: launcherManager.getProcesses().some(p => p.programId === 'terminal'),
-      type: 'cli'
     }
   ]);
 });
@@ -638,7 +644,13 @@ app.post('/api/launcher/launch', async (req, res) => {
   const { programId, mode, binaryPath, args, cwd, env, timeout } = req.body ?? {};
   if (!programId) return res.status(400).json({ error: 'programId is required' });
 
-  const reqPath = binaryPath || (programId === 'vscode' ? 'code' : programId === 'code-server' ? 'code-server' : '/bin/bash');
+  // إصلاح §5-0: لا يُقبل binaryPath اعتباطي من العميل — يُستوفى من الكتالوج المكتشف
+  // إن لم يُقدَّم، وكلاهما يمر عبر بوابة ProcessLauncher.validateCommand (allowlist
+  // + حظر المفسِّرات العامة). الافتراضي السابق '/bin/bash' أُزيل.
+  const reqPath = binaryPath || launcherManager.resolveProgramBinary(programId);
+  if (!reqPath) {
+    return res.status(400).json({ error: `program '${programId}' is not in the launcher catalog and no binaryPath was provided` });
+  }
   const result = await launcherManager.launch({
     programId,
     mode: mode || 'managed',
@@ -661,7 +673,11 @@ app.post('/api/launcher/embed', async (req, res) => {
   const { programId, containerId, mode, binaryPath, args, embedStrategy } = req.body ?? {};
   if (!programId || !containerId) return res.status(400).json({ error: 'programId and containerId are required' });
 
-  const reqPath = binaryPath || (programId === 'vscode' ? 'code' : programId === 'code-server' ? 'code-server' : '/bin/bash');
+  // إصلاح §5-0: نفس سياسة launch — لا binaryPath اعتباطي، يستوفى من الكتالوج إن لزم.
+  const reqPath = binaryPath || launcherManager.resolveProgramBinary(programId);
+  if (!reqPath) {
+    return res.status(400).json({ error: `program '${programId}' is not in the launcher catalog and no binaryPath was provided` });
+  }
   const result = await launcherManager.launchAndEmbed({
     programId,
     mode: mode || 'embedded',

@@ -9,6 +9,8 @@ export interface ProfileConfig {
   enableHermes: boolean;
   enableEditor: boolean;
   enableLinuxHost: boolean;
+  /** اكتشاف سيرفرات LLM المحلية تلقائياً عند الإقلاع (اختياري، افتراضي false — يحفظ ميزانية أداء الإقلاع) */
+  enableLLMDiscovery: boolean;
   description: LocalizedString;
 }
 
@@ -20,6 +22,7 @@ export const PROFILES: Record<ProfileName, ProfileConfig> = {
     enableHermes: false,
     enableEditor: false,
     enableLinuxHost: true,
+    enableLLMDiscovery: false,
     description: { ar: 'تشغيل نواة P الأساسية فقط مع VFS والأوامر الميكانيكية.', en: 'Run core P kernel with VFS and basic commands.' }
   },
   agent: {
@@ -29,6 +32,7 @@ export const PROFILES: Record<ProfileName, ProfileConfig> = {
     enableHermes: false,
     enableEditor: false,
     enableLinuxHost: true,
+    enableLLMDiscovery: false,
     description: { ar: 'تشغيل الوكيل الذكي محلياً مع إدارة الذاكرة والصلاحيات وSyscalls.', en: 'Run local agent kernel with memory, access control, and syscalls.' }
   },
   hermes: {
@@ -38,6 +42,7 @@ export const PROFILES: Record<ProfileName, ProfileConfig> = {
     enableHermes: true,
     enableEditor: false,
     enableLinuxHost: true,
+    enableLLMDiscovery: false,
     description: { ar: 'تشغيل حلقة التعلّم والمفكرة والمستندات التدريبية الموطنة.', en: 'Run learning loop, notebook, and localized training materials.' }
   },
   editor: {
@@ -47,6 +52,7 @@ export const PROFILES: Record<ProfileName, ProfileConfig> = {
     enableHermes: true,
     enableEditor: true,
     enableLinuxHost: true,
+    enableLLMDiscovery: false,
     description: { ar: 'تشغيل بيئة المحرر مع التبويبات والمستندات والرموز وحزم اللغات.', en: 'Run full editor workbench with tabs, documents, symbols, and language packs.' }
   }
 };

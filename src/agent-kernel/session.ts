@@ -26,14 +26,16 @@ export class SessionInstance {
   public quotaGuard?: ResourceQuotaGuard;
 
   private streamListeners = new Set<SessionStreamHandler>();
+  private eventBus?: EventBus;
 
-  constructor(id: string, ownerAgent: string = 'system', metadata: Record<string, any> = {}, quotaGuard?: ResourceQuotaGuard) {
+  constructor(id: string, ownerAgent: string = 'system', metadata: Record<string, any> = {}, quotaGuard?: ResourceQuotaGuard, eventBus?: EventBus) {
     this.id = id;
     this.ownerAgent = ownerAgent;
     this.createdAt = Date.now();
     this.lastActiveAt = Date.now();
     this.metadata = metadata;
     this.quotaGuard = quotaGuard;
+    this.eventBus = eventBus;
   }
 
   public executeRequest(content: any): Result<void, Error> {
@@ -74,8 +76,14 @@ export class SessionInstance {
     for (const listener of this.streamListeners) {
       try {
         listener(msg);
-      } catch (e) {
-        // Safe listener logging
+      } catch (e: any) {
+        // §5-ح: لا يُبتلع خطأ المستمع صامتاً — يُوجَّه إلى EventBus/onError
+        // (مستمع خاطئ لا يُسقط البث عن بقية المستمعين).
+        this.eventBus?.emit('session:stream:error', {
+          sessionId: this.id,
+          msgType,
+          error: e instanceof Error ? e.message : String(e)
+        });
       }
     }
   }
@@ -107,7 +115,7 @@ export class SessionManager {
       return err(new Error(`EEXIST: Session '${id}' already exists`));
     }
 
-    const session = new SessionInstance(id, ownerAgent, metadata, this.quotaGuard);
+    const session = new SessionInstance(id, ownerAgent, metadata, this.quotaGuard, this.eventBus);
     this.sessions.set(id, session);
     this.eventBus?.emit('session:created', { sessionId: id, ownerAgent });
     return ok(session);

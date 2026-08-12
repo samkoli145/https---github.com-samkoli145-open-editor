@@ -47,7 +47,7 @@ export class SafeSystemStorageEngine implements ISystemStorageEngine {
 
     const sanitizedKey = sanitizeRes.value;
 
-    if (!this.store.has(sanitizedKey) && !this.store.has(key) && this.store.size >= this.maxRecords) {
+    if (!this.store.has(sanitizedKey) && this.store.size >= this.maxRecords) {
       return err(new Error(`ESTORAGE_FULL: Storage capacity limit (${this.maxRecords} records) reached`));
     }
 
@@ -71,8 +71,8 @@ export class SafeSystemStorageEngine implements ISystemStorageEngine {
         return err(new Error(`ESTORAGE_WRITE: Atomic buffer serialization failed for '${key}'`));
       }
 
+      // §5-د: كتابة المفتاح المُنقّى فقط (لم يعد نسختان: خام + مُنقّى)
       this.store.set(sanitizedKey, tempBuffer);
-      this.store.set(key, tempBuffer);
       return ok(undefined);
     } catch (e: any) {
       return err(new Error(`ESTORAGE_WRITE: Failed to save storage record '${key}': ${e.message}`));
@@ -81,13 +81,11 @@ export class SafeSystemStorageEngine implements ISystemStorageEngine {
 
   public async load<T>(key: string): Promise<Result<T, Error>> {
     const sanitizeRes = sanitizePath(key, this.storageRoot);
-    const sanitizedKey = sanitizeRes.isOk ? sanitizeRes.value : key;
-    
-    if (!sanitizeRes.isOk && !this.store.has(key)) {
+    if (!sanitizeRes.isOk) {
       return err(new Error(`ESECURITY_VIOLATION: Invalid storage key path '${key}': ${sanitizeRes.error.message}`));
     }
 
-    const raw = this.store.get(key) || this.store.get(sanitizedKey);
+    const raw = this.store.get(sanitizeRes.value);
     if (!raw) {
       return err(new Error(`ENOENT: Storage record '${key}' not found`));
     }
@@ -116,18 +114,20 @@ export class SafeSystemStorageEngine implements ISystemStorageEngine {
 
   public async exists(key: string): Promise<boolean> {
     const sanitizeRes = sanitizePath(key, this.storageRoot);
-    const sanitizedKey = sanitizeRes.isOk ? sanitizeRes.value : key;
-    return this.store.has(key) || this.store.has(sanitizedKey);
+    if (!sanitizeRes.isOk) return false;
+    return this.store.has(sanitizeRes.value);
   }
 
   public async delete(key: string): Promise<Result<void, Error>> {
     const sanitizeRes = sanitizePath(key, this.storageRoot);
-    const sanitizedKey = sanitizeRes.isOk ? sanitizeRes.value : key;
-    if (!this.store.has(sanitizedKey) && !this.store.has(key)) {
+    if (!sanitizeRes.isOk) {
+      return err(new Error(`ESECURITY_VIOLATION: Invalid storage key path '${key}': ${sanitizeRes.error.message}`));
+    }
+    const sanitizedKey = sanitizeRes.value;
+    if (!this.store.has(sanitizedKey)) {
       return err(new Error(`ENOENT: Record '${key}' not found`));
     }
     this.store.delete(sanitizedKey);
-    this.store.delete(key);
     return ok(undefined);
   }
 

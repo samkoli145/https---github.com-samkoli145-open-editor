@@ -90,11 +90,13 @@ describe('Architecture Enhancements - Cache, Storage, Session, & Quota', () => {
       await storage.save('snap_corrupt', { secret: 'data' });
 
       // Directly tamper raw store content to simulate disk bit-rot or bad write
+      // (§5-د: السجل الوحيد هو المفتاح المُنقّى — نلتقطه بالمسح لا بمفتاح خام مفترض)
       const storeMap = (storage as any).store as Map<string, string>;
-      const raw = storeMap.get('snap_corrupt')!;
+      const raw = Array.from(storeMap.values())[0];
       const parsed = JSON.parse(raw);
       parsed.payload.secret = 'TAMPERED_DATA'; // mutate payload without updating checksum
-      storeMap.set('snap_corrupt', JSON.stringify(parsed));
+      const sanitizedKey = Array.from(storeMap.keys())[0];
+      storeMap.set(sanitizedKey, JSON.stringify(parsed));
 
       const loadRes = await storage.load('snap_corrupt');
       expect(loadRes.isErr).toBe(true);

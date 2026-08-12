@@ -5,9 +5,11 @@ import { PROFILES, type ProfileName, type ProfileConfig } from './profiles';
 import { VirtualFileSystem } from './vfs';
 import { loadConfigFile, type HostConfigFile } from './config-loader';
 import { HermesKernel } from '../agent-kernel/hermes/hermes-kernel';
+import { AgentKernel } from '../agent-kernel/agent-kernel';
 import { ToolRegistry } from '../agent-kernel/tools';
 import { SafeStorageEngine } from '../agent-kernel/storage';
-import { LLMCore, DeterministicBackend } from '../agent-kernel/llm-core';
+import { LLMCore, DeterministicBackend, backendsFromDiscoveredServers, type ILLMBackend } from '../agent-kernel/llm-core';
+import { discoverLocalLLMServers, type LocalLLMServerInfo, type LocalServerDiscoveryOptions } from '../agent-kernel/local-server-discovery';
 import { SessionManager } from '../agent-kernel/session';
 import { ResourceQuotaGuard } from '../agent-kernel/quota';
 import { EditorManager } from './editor-manager';
@@ -22,6 +24,10 @@ export interface BootOptions {
   enableHermes?: boolean;
   enableEditor?: boolean;
   enableLinuxHost?: boolean;
+  /** اكتشاف سيرفرات LLM المحلية تلقائياً عند الإقلاع (افتراضي: من ملف الإعداد أو البروفايل) */
+  enableLLMDiscovery?: boolean;
+  /** إعدادات الاكتشاف (منافذ/مضيفين/مهلة/تزامن/fetchImpl) */
+  llmDiscovery?: LocalServerDiscoveryOptions;
   logLevel?: 'silent' | 'error' | 'warn' | 'info' | 'debug';
   kernelOptions?: Record<string, any>;
 }
@@ -33,6 +39,7 @@ export class Bootloader {
   private _kernel?: Kernel;
   private _profileConfig: ProfileConfig;
   private options: BootOptions;
+  private _llmServers: LocalLLMServerInfo[] = [];
 
   constructor(options: BootOptions = {}) {
     this.options = { ...options };
@@ -66,6 +73,11 @@ export class Bootloader {
     return this._runtime?.editor;
   }
 
+  /** سيرفرات LLM المكتشفة عند الإقلاع (فارغة إن عُطّل الاكتشاف أو لم يستجب شيء) */
+  public get discoveredLLMServers(): LocalLLMServerInfo[] {
+    return this._llmServers;
+  }
+
   private updateState(newState: RuntimeState): void {
     if (this._runtime) {
       this._runtime.setState(newState);
@@ -91,6 +103,7 @@ export class Bootloader {
       if (fileConfig.enableHermes !== undefined) this._profileConfig.enableHermes = fileConfig.enableHermes;
       if (fileConfig.enableEditor !== undefined) this._profileConfig.enableEditor = fileConfig.enableEditor;
       if (fileConfig.enableLinuxHost !== undefined) this._profileConfig.enableLinuxHost = fileConfig.enableLinuxHost;
+      if (fileConfig.enableLLMDiscovery !== undefined) this._profileConfig.enableLLMDiscovery = fileConfig.enableLLMDiscovery;
     }
     this.updateState('config-loaded');
   }
@@ -122,32 +135,37 @@ export class Bootloader {
 
       const subsystems: { agentKernel?: any; hermes?: any; editor?: any; snowball?: any } = {};
 
-      // نواة وكيل حقيقية (بدل mock): LLMCore + ToolRegistry (موصول بسجل الأوامر) + SessionManager (موصول بالحصص)
+      // نواة الوكيل العليا الحقيقية (AgentKernel) — LLMCore + ToolRegistry (موصول بسجل الأوامر) + SessionManager (موصول بالحصص)
       if (this._profileConfig.enableAgentKernel) {
-        const llm = new LLMCore({
-          backends: [new DeterministicBackend({
-            defaultResponse: 'Deterministic response from local agent'
-          })]
-        });
         const quotaGuard = new ResourceQuotaGuard();
         const sessions = new SessionManager(this._kernel.getContext().events, quotaGuard);
         const tools = new ToolRegistry(this._kernel.getContext().commands);
-        subsystems.agentKernel = {
-          name: 'AgentKernel',
-          status: 'active',
-          storage: new SafeStorageEngine(),
-          llmCore: llm,
-          llm,
-          quotaGuard,
-          sessions,
-          tools,
-          toolRegistry: tools,
-          sessionMgr: sessions,
-          chat: async (msg: string): Promise<string> => {
-            const res = await llm.chat([{ role: 'user', content: String(msg ?? '') }]);
-            return res.isOk ? res.value.content : `Agent error: ${res.error.message}`;
+
+        // الخلفية الحتمية أولاً (fallback)، ثم خلفيات سيرفرات LLM المكتشفة إن فُعّل الاكتشاف
+        const backends: ILLMBackend[] = [new DeterministicBackend({
+          defaultResponse: 'Deterministic response from local agent'
+        })];
+        const enableDiscovery = this.options.enableLLMDiscovery ?? this._profileConfig.enableLLMDiscovery;
+        if (enableDiscovery) {
+          try {
+            const discovered = await discoverLocalLLMServers(this.options.llmDiscovery ?? {});
+            this._llmServers = discovered;
+            backends.push(...backendsFromDiscoveredServers(discovered));
+          } catch {
+            // الاكتشاف اختياري؛ فشله لا يُسقط الإقلاع
           }
-        };
+        }
+
+        const agentKernel = new AgentKernel({
+          backends,
+          tools,
+          quota: quotaGuard,
+          sessions,
+          storage: new SafeStorageEngine(),
+        });
+        await agentKernel.boot();
+        agentKernel.attach(this._kernel);
+        subsystems.agentKernel = agentKernel;
       }
 
       // نواة هيرمس حقيقية (HermesKernel) بدل mock — تعريض serve/learn/hermesKernel عبر البوابة
@@ -320,10 +338,13 @@ export class Bootloader {
           description: { ar: 'إرسال استعلام للوكيل الذكي', en: 'Send query to local agent' },
           handler: async (p: any) => {
             const agent = this.agentKernel;
-            if (!agent?.chat) return { output: 'Agent unavailable' };
+            if (!agent?.executeSyscall) return { output: 'Agent unavailable' };
             const msg = typeof p === 'string' ? p : (p?.msg ?? p?.message ?? '');
-            const output = await agent.chat(msg);
-            return { output };
+            const res = await agent.executeSyscall('agent.llm.chat', {
+              messages: [{ role: 'user', content: String(msg ?? '') }]
+            });
+            if (res.isErr) return { output: `Agent error: ${res.error.message}` };
+            return { output: res.value?.content ?? '' };
           }
         });
       }

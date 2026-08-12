@@ -7,6 +7,7 @@ export interface HostConfigFile {
   enableHermes?: boolean;
   enableEditor?: boolean;
   enableLinuxHost?: boolean;
+  enableLLMDiscovery?: boolean;
   vfsRoot?: string;
   logLevel?: 'silent' | 'error' | 'warn' | 'info' | 'debug';
 }
@@ -17,6 +18,7 @@ const ALLOWED_CONFIG_FIELDS = new Set([
   'enableHermes',
   'enableEditor',
   'enableLinuxHost',
+  'enableLLMDiscovery',
   'vfsRoot',
   'logLevel'
 ]);

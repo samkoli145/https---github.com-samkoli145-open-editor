@@ -5,10 +5,22 @@ export interface ContextMessage {
   timestamp: number;
 }
 
+/** عدّاد توكنات: نص → عدد توكنات تقديرية */
+export type TokenCounter = (text: string) => number;
+
 export interface ContextWindowOptions {
   maxMessages?: number;
   maxEstimatedTokens?: number;
+  tokenCounter?: TokenCounter;
 }
+
+/** عداد توكنات معياري (word + نصف علامات الترقيم) — تقدير أوضح من طول/4 */
+export const DEFAULT_TOKEN_COUNTER: TokenCounter = (text) => {
+  if (text.length === 0) return 0;
+  const words = text.trim().split(/\s+/).length;
+  const punctuation = (text.match(/[.,!?;:()[\]{}"'`~@#$%^&*+=|\\<>/_-]/g) ?? []).length;
+  return Math.max(1, Math.ceil(words + punctuation * 0.5));
+};
 
 /**
  * Context Model for managing session conversation state and token/message window pruning.
@@ -17,10 +29,16 @@ export class ContextModel {
   private messages: ContextMessage[] = [];
   private maxMessages: number;
   private maxEstimatedTokens: number;
+  private tokenCounter: TokenCounter;
 
   constructor(options: ContextWindowOptions = {}) {
     this.maxMessages = options.maxMessages || 100;
     this.maxEstimatedTokens = options.maxEstimatedTokens || 4000;
+    this.tokenCounter = options.tokenCounter ?? DEFAULT_TOKEN_COUNTER;
+  }
+
+  public setTokenCounter(counter: TokenCounter): void {
+    this.tokenCounter = counter;
   }
 
   public append(role: ContextMessage['role'], content: string, name?: string): ContextMessage {
@@ -40,7 +58,7 @@ export class ContextModel {
   }
 
   public estimateTokens(): number {
-    return this.messages.reduce((total, m) => total + Math.ceil(m.content.length / 4), 0);
+    return this.messages.reduce((total, m) => total + this.tokenCounter(m.content), 0);
   }
 
   private prune(): void {

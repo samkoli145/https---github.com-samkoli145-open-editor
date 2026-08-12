@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Result, ok, err } from '../../kernel/core/result';
 import { DisposableStore } from '../../kernel/core/disposable';
@@ -20,6 +20,7 @@ export interface VFSFileIndexEntry {
   checksum: string;
   isExecutable: boolean;
   updatedAt: number;
+  linkTarget?: string; // §5-طـ: هدف السيملينك المُسجَّل (يُفحص ضد هروب الجذر عند التسجيل)
 }
 
 export function computeSha256(data: Uint8Array | string): string {
@@ -59,7 +60,8 @@ export class PersistentIndexer {
     mode: number = 0o644,
     uid: number = 1000,
     gid: number = 1000,
-    nodeType: FileNodeType = 'file'
+    nodeType: FileNodeType = 'file',
+    linkTarget?: string
   ): Result<VFSFileIndexEntry, Error> {
     if (this.isDisposed) {
       return err(new Error('EDISPOSED: PersistentIndexer has been shut down'));
@@ -74,6 +76,18 @@ export class PersistentIndexer {
     const fileType = detectFileType(content);
     const size = typeof content === 'string' ? new TextEncoder().encode(content).length : content.length;
     const finalChecksum = checksum ?? computeSha256(content);
+
+    // §5-طـ: تتبّع هدف السيملينك ورفض ما يهرب خارج الجذر (بدل عقدة ساذجة بلا هدف).
+    let trackedTarget: string | undefined;
+    if (nodeType === 'symlink' && linkTarget !== undefined) {
+      const targetAbs = isAbsolute(linkTarget) ? linkTarget : resolve(dirname(safePath), linkTarget);
+      const rootAbs = resolve(this.rootDir);
+      const rootPrefix = rootAbs.endsWith('/') ? rootAbs : `${rootAbs}/`;
+      if (targetAbs !== rootAbs && !targetAbs.startsWith(rootPrefix)) {
+        return err(new Error(`ESECURITY: symlink '${rawPath}' targets '${linkTarget}' (${targetAbs}) outside the index root '${this.rootDir}'`));
+      }
+      trackedTarget = linkTarget;
+    }
 
     // Auto-promote executable permissions if magic bytes indicate ELF/PE/Script binary
     const isExe = fileType.isExecutable || (mode & 0o111) !== 0;
@@ -90,13 +104,30 @@ export class PersistentIndexer {
       mimeType: fileType.mime,
       checksum: finalChecksum,
       isExecutable: isExe,
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      linkTarget: trackedTarget
     };
 
     this.index.set(safePath, entry);
     this.scheduleSync();
 
     return ok(entry);
+  }
+
+  /** §5-طـ: يعيد هدف السيملينك المُسجَّل إن وُجد، وإلا err. */
+  public resolveLinkTarget(rawPath: string): Result<string, Error> {
+    const pathRes = sanitizePath(rawPath, this.rootDir);
+    if (!pathRes.isOk) {
+      return err(pathRes.error);
+    }
+    const entry = this.index.get(pathRes.value);
+    if (!entry) {
+      return err(new Error(`ENOENT: Index entry not found for path '${rawPath}'`));
+    }
+    if (entry.type !== 'symlink' || entry.linkTarget === undefined) {
+      return err(new Error(`ENOTLINK: '${rawPath}' is not a tracked symlink`));
+    }
+    return ok(entry.linkTarget);
   }
 
   public chmod(rawPath: string, mode: number, callerUid = 1000): Result<VFSFileIndexEntry, Error> {

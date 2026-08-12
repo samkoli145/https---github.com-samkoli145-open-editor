@@ -77,6 +77,18 @@ export class LauncherManager {
   }
 
   /**
+   * إصلاح §5-0: استيفاء binaryPath شرعي من الكتالوج المكتشف — لا يُقبل افتراضي
+   * خطير (/bin/bash سابقاً). يعيد undefined إن لم يُعرف البرنامج.
+   */
+  resolveProgramBinary(programId: string): string | undefined {
+    const program = this.catalog.getProgram(programId);
+    if (!program) return undefined;
+    const execCommand = this.discoveryScanner.getExecCommand(program);
+    const parts = execCommand.split(' ').filter(Boolean);
+    return parts[0] || program.exec;
+  }
+
+  /**
    * فتح ملف بالبرنامج المناسب
    */
   async openFile(filePath: string): Promise<Result<string, Error>> {

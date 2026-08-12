@@ -4,6 +4,8 @@ export type { AgentSyscallOptions, AgentSyscallPriority, AgentSyscallStatus } fr
 export { AgentKernel, AGENT_KERNEL_COMMANDS } from './agent-kernel';
 export type { AgentKernelOptions, AgentCommandSpec, AgentCommandType, AgentManagedType, AgentManagedEngine, AgentKernelStatus, AgentKernelState, LLMChatResult } from './agent-kernel';
 
+export { evaluateMathExpression } from './math-eval';
+
 export { AccessManager } from './access';
 export type { AccessPolicy, PolicySummary } from './access';
 
@@ -16,8 +18,11 @@ export type { ToolDefinition, ToolExecutionContext } from './tools';
 export { AgentRegistry } from './registry';
 export type { AgentRecord, AgentState, RegisterAgentParams } from './registry';
 
-export { LLMCore, OllamaBackend, DeterministicBackend } from './llm-core';
-export type { LLMMessage, LLMReply, ILLMBackend, OllamaBackendOptions, DeterministicBackendOptions, LLMCoreOptions } from './llm-core';
+export { LLMCore, OllamaBackend, DeterministicBackend, backendsFromDiscoveredServers } from './llm-core';
+export type { LLMMessage, LLMReply, ILLMBackend, OllamaBackendOptions, DeterministicBackendOptions, LLMCoreOptions, DiscoveredBackendOptions } from './llm-core';
+
+export { discoverLocalLLMServers, vendorForPort, DEFAULT_LLM_SERVER_PORTS, DEFAULT_LLM_SERVER_HOSTS } from './local-server-discovery';
+export type { LocalLLMServerInfo, LocalLLMServerVendor, LocalServerDiscoveryOptions, LocalFetchLike } from './local-server-discovery';
 
 export { LRUCache } from '../kernel/core/cache';
 export type { CacheOptions } from '../kernel/core/cache';

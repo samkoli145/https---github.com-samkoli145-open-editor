@@ -1,5 +1,6 @@
 import { Result, ok, err } from '../kernel/core/result';
 import { CommandRegistry } from '../kernel/command-registry';
+import { evaluateMathExpression } from './math-eval';
 
 export interface ToolDefinition {
   name: string;
@@ -138,18 +139,9 @@ export class ToolRegistry {
         if (!expr || typeof expr !== 'string') {
           throw new Error('Invalid arithmetic expression');
         }
-        // Sanitize: only allow numbers, spaces, operators +, -, *, /, (, ), .
-        if (!/^[0-9+\-*/().\s]+$/.test(expr)) {
-          throw new Error('Forbidden character in math expression');
-        }
-        // Safe evaluation function
+        // محلّل حسابي خاص (recursive descent) — لا eval ولا new Function
         try {
-          const fn = new Function(`"use strict"; return (${expr});`);
-          const val = fn();
-          if (typeof val !== 'number' || !isFinite(val)) {
-            throw new Error('Math evaluation produced non-finite number');
-          }
-          return val;
+          return evaluateMathExpression(expr);
         } catch (e: any) {
           throw new Error(`Math syntax error: ${e.message}`);
         }

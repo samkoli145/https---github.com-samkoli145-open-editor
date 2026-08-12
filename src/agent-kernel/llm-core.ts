@@ -1,4 +1,5 @@
 import { Result, ok, err } from '../kernel/core/result';
+import type { LocalLLMServerInfo } from './local-server-discovery';
 
 export interface LLMMessage {
   role: 'system' | 'user' | 'assistant';
@@ -26,23 +27,71 @@ export interface OllamaBackendOptions {
   name?: string;
   model?: string;
   baseUrl?: string;
+  timeoutMs?: number;
+  fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
+  /** المحاكاة تعمل fallback فقط عند فشل الاتصال (افتراضي true)؛ عطّلها لجعل الاتصال حتمياً */
+  simulateOnFailure?: boolean;
 }
 
 export class OllamaBackend implements ILLMBackend {
   public readonly name: string;
   public readonly model: string;
   public readonly baseUrl: string;
+  private readonly timeoutMs: number;
+  private readonly fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
+  private readonly simulateOnFailure: boolean;
 
   constructor(options: OllamaBackendOptions = {}) {
     this.name = options.name || 'ollama';
     this.model = options.model || 'llama3.2';
-    this.baseUrl = options.baseUrl || 'http://localhost:11434';
+    this.baseUrl = (options.baseUrl || 'http://localhost:11434').replace(/\/$/, '');
+    this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.fetchImpl = options.fetchImpl;
+    this.simulateOnFailure = options.simulateOnFailure ?? true;
   }
 
   public async chat(messages: LLMMessage[]): Promise<Result<LLMReply, Error>> {
-    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
-    
+    const fetchImpl = this.fetchImpl ?? globalThis.fetch;
+    if (typeof fetchImpl === 'function') {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      try {
+        const res = await fetchImpl(`${this.baseUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: this.model, messages, stream: false }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          throw new Error(`Ollama HTTP ${res.status}`);
+        }
+        const data: any = await res.json();
+        const content = typeof data?.message?.content === 'string' ? data.message.content : '';
+        const promptTokens = typeof data?.prompt_eval_count === 'number' ? data.prompt_eval_count : 0;
+        const completionTokens = typeof data?.eval_count === 'number' ? data.eval_count : 0;
+        return ok({
+          content,
+          model: typeof data?.model === 'string' ? data.model : this.model,
+          finishReason: data?.done_reason || 'stop',
+          usage: {
+            promptTokens,
+            completionTokens,
+            totalTokens: promptTokens + completionTokens,
+          },
+        });
+      } catch (e: any) {
+        if (!this.simulateOnFailure) {
+          return err(e instanceof Error ? e : new Error(String(e)));
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    } else if (!this.simulateOnFailure) {
+      return err(new Error('ENOTSUP: fetch is not available'));
+    }
+
     // Fallback/Simulated Ollama response for local unit tests without live Ollama instance
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
     return ok({
       content: `[Ollama:${this.model}] Response to: ${lastUserMsg}`,
       model: this.model,
@@ -91,6 +140,38 @@ export class DeterministicBackend implements ILLMBackend {
 export interface LLMCoreOptions {
   backends?: ILLMBackend[];
   defaultModel?: string;
+}
+
+export interface DiscoveredBackendOptions {
+  /** مهلة كل طلب للخلفيات المكتشفة (افتراضي 10s) */
+  timeoutMs?: number;
+  /** نموذج افتراضي إن لم يعلن السيرفر نماذج */
+  fallbackModel?: string;
+}
+
+/**
+ * يحوّل سيرفرات LLM المكتشفة إلى خلفيات قابلة للتشغيل.
+ * خلفية واحدة لكل سيرفر Ollama (بأول نموذج معلن)؛ السيرفرات OpenAI-المتوافقة
+ * الأخرى تُكتشف وتُعرض لكن بلا خلفية حتى تُنفَّذ واجهتها.
+ */
+export function backendsFromDiscoveredServers(
+  infos: LocalLLMServerInfo[],
+  options: DiscoveredBackendOptions = {},
+): ILLMBackend[] {
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  const backends: ILLMBackend[] = [];
+  for (const info of infos) {
+    if (info.vendor !== 'ollama') continue;
+    backends.push(
+      new OllamaBackend({
+        name: `ollama@${info.port}`,
+        baseUrl: info.baseUrl,
+        model: info.models[0] ?? options.fallbackModel ?? 'llama3.2',
+        timeoutMs,
+      }),
+    );
+  }
+  return backends;
 }
 
 export class LLMCore {

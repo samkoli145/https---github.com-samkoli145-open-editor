@@ -25,7 +25,6 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "@google/genai": "^2.16.0",
     "cors": "^2.8.6",
     "express": "^5.2.1"
   }

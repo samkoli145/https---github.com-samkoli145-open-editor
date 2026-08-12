@@ -117,6 +117,45 @@ describe('Nawat Black-Box E2E — real server.ts (auth & kernel)', () => {
   });
 });
 
+describe('Nawat Black-Box E2E — §5-ي hardening (register/emit تعتمد المصادقة + تدقيق إلزامي)', () => {
+  it('rejects /api/commands/register without X-API-Key (401)', async () => {
+    const res = await api('/api/commands/register', {
+      method: 'POST',
+      key: null,
+      body: { id: 'x', titleAr: 'أ', titleEn: 'x' }
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('records commands.register + extensions.activate + events.emit in the audit log', async () => {
+    const reg = await api('/api/commands/register', {
+      method: 'POST',
+      body: { id: 'audit.cmd', titleAr: 'تدقيق', titleEn: 'audit' }
+    });
+    expect(reg.status).toBe(200);
+
+    const ext = await api('/api/extensions/activate', {
+      method: 'POST',
+      body: { id: 'audit.ext', nameAr: 'ت', nameEn: 'e' }
+    });
+    expect(ext.status).toBe(200);
+
+    const emit = await api('/api/events/emit', {
+      method: 'POST',
+      body: { name: 'audit.evt', payload: { note: 'probe' } }
+    });
+    expect(emit.status).toBe(200);
+
+    const res = await api('/api/audit');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const actions = body.records.map((r: any) => r.action);
+    expect(actions).toContain('commands.register');
+    expect(actions).toContain('extensions.activate');
+    expect(actions).toContain('events.emit');
+  });
+});
+
 describe('Nawat Black-Box E2E — commands & isolated arch execution', () => {
   it('executes the built-in system.echo command', async () => {
     const res = await api('/api/commands/execute', { method: 'POST', body: { id: 'system.echo', payload: 'bb-payload' } });

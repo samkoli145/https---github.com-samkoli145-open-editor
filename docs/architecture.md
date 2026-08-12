@@ -1,7 +1,7 @@
 # بنية النواة — الحالة الحالية (Architecture Snapshot)
 
 > **وثيقة الحالة الجارية.** تُحدَّث مع كل تغيير هيكلي، ولا تحفظ التاريخ (التاريخ في `docs/changelog.md`). `PLAN.md` = مؤشر (index) فقط.
-> آخر تحديث: جلسة «النواة العليا المستقلة» — اقرأ من الأسفل إلى الأعلى (الحديث فوق).
+> آخر تحديث: جلسة §4-4 (اكتشاف سيرفرات LLM المحلية + دمجها في الإقلاع) — اقرأ من الأسفل إلى الأعلى (الحديث فوق).
 
 ## 1. التدرج الطبقي
 
@@ -22,7 +22,7 @@
 | نواة النظام P | `src/kernel/kernel.ts` | ميكانيكا عامة: أوامر/أحداث/خدمات/إضافات |
 | النواة العليا | `src/agent-kernel/agent-kernel.ts` (`AgentKernel` — الطبقة الخامسة §8) | توزيع عمل الوكلاء عبر `executeSyscall` + إدارة محركات |
 
-**الحالة الراهنة (إلى حين تنفيذ §4-0):** `bootloader.ts:126-151` لا يزال يبني **كائن تجميعي** باسم `agentKernel` (llm/tools/sessions/quota/storage) — الفئة `AgentKernel` جاهزة (17 اختباراً ✓) لكن **لم تُربط بعد** في المستضيف. لا توجد نواتان فعليتان في البوت لودر بعد — النواة العليا موجودة كفئة مستقلة باختباراتها.
+**الحالة الراهنة (بعد §4-0):** `bootloader.ts` يبني **مثيلاً حقيقياً** `new AgentKernel({ backends, tools, quota, sessions, storage })` + `boot()` + `attach(this._kernel)` — النواة العليا أصبحت فئة واحدة تُسجِّل أوامر `agent.*` (24 أمراً + scheduler.stats/llm.models/llm.health) في سجل نواة النظام بنفسها. `subsystems.agentKernel` هو المثيل نفسه (لا كائن تجميعي). معالج `agent.llm.chat` اليدوي في bootloader غلاف يتصل بـ`executeSyscall` ويعيد `{ output }`؛ `server.ts` يستخدم `runtime.agentKernel?.llm`. (تفاصيل §4-0 → docs/changelog.md)
 
 ## 3. النواة العليا (AgentKernel) — الطبقة الخامسة
 
@@ -33,6 +33,9 @@
 - **مسار التنفيذ**: `executeSyscall` → أثر (ensureAgent) → بوابة الصلاحيات → مسار سريع (إدارة) أو مجدول (بيانات).
 - **attach(kernel)** يسجّل أوامر `agent.*` في نواة P؛ **registerEngine** يدير محركات (هيرمس/سنجبول/محرر/لانشر) كوحدات داخلية.
 - `LLMCore` أُضيف له `availableModels()`/`health()` (إضافي آمن، لم يمس `mcp-*`).
+- `OllamaBackend` (بعد §4-3): يتصل فعلياً عبر `fetch` إلى `POST {baseUrl}/api/chat` (`{model, messages, stream:false}`) مع `AbortController` مهلة 10s؛ المحاكاة fallback فقط عند فشل الاتصال، و`simulateOnFailure:false` يجعلها حتمية. `fetchImpl` لحقن fetch في الاختبار.
+- `discoverLocalLLMServers` (بعد §4-4): مسح شامل للمضيفين (`127.0.0.1`/`localhost`) × المنافذ النموذجية (`DEFAULT_LLM_SERVER_PORTS` — Ollama 11434 · LM Studio 1234 · llama.cpp 8080 · vLLM 8000 · Jan 1337 · KoboldCpp 5001 · text-generation-webui 7860 · 3001) بترتيب بروتوكول: Ollama الأصلية (`/api/version` ثم `/api/tags`) ثم OpenAI-المتوافقة (`/v1/models` ثم `/models` على 404)؛ استدلال البائع من البروتوكول أو `vendorForPort`؛ مهلة 800ms + إجهاض AbortController + `concurrency` 8 + `fetchImpl`؛ أي فشل فردي يُتجاوز. المصدر: `src/agent-kernel/local-server-discovery.ts`.
+- **دمج الإقلاع** (بعد §4-4): `bootloader` عند `enableLLMDiscovery` (خيار/ملف إعداد/`NAWAT_LLM_DISCOVERY=1`) يكتشف قبل بناء `AgentKernel` ويمرّر `backends = [DeterministicBackend, ...backendsFromDiscoveredServers(infos)]` → `availableModels()` يظهر نماذج حية (`ollama@11434 → qwen2.5:0.5b`)؛ افتراضي false حفظاً لميزانية `boot<500ms`؛ `bootloader.discoveredLLMServers` يعرض السيرفرات.
 
 ## 4. الأمان — بوابات LinuxArchExecutionLayer (دفاع متعدد الطبقات)
 
@@ -46,9 +49,15 @@
 7. **رفض setuid/setgid** (`0o6000`).
 8. **توقيع ELF** (e_ident/e_type + SHA-256 `authorizedSignatures`).
 
-> ⚠️ **ثغرة مفتوحة [CVE-internal] §5-0**: المسار الحاوي على `/` يتجاوز allowlist ويُقبل بفحص ELF فقط — `binaryPath` اعتباطي من `/api/launcher/*` (افتراضي `/bin/bash`). **أولوية قصوى.** الإصلاح: (أ) allowlist على `basename`، (ب) حظر المفسِّرات العامة (bash/sh/python/perl/node).
+> ~~⚠️ **ثغرة مفتوحة [CVE-internal] §5-0**: المسار الحاوي على `/` يتجاوز allowlist ويُقبل بفحص ELF فقط — `binaryPath` اعتباطي من `/api/launcher/*` (افتراضي `/bin/bash`).~~ **✅ عولج (2026-08-12)**: دفاع ثلاثي — بوابة `ProcessLauncher` (allowlist `LAUNCHER_ALLOWED_BINARIES` + حظر المفسِّرات) + `FORBIDDEN_GENERAL_INTERPRETERS` في الطبقة الأرشية (basename المسار المطلق) + إزالة `/bin/bash` واستيفاء `resolveProgramBinary` من الكتالوج. `tests/lolbin-hardening.test.ts` (9/9).
 
-## 5. المكونات المترابطة
+## 5. المصادقة والتدقيق (REST)
+
+- `X-API-Key` إلزامي لكل `/api` (عدا `/api/health`) — يُولَّد عشوائياً (`randomBytes(24)`) عند غياب `NAWAT_API_KEY` ويُطبع عند الإقلاع؛ افتراضي الربط `127.0.0.1` (تجاوز `NAWAT_HOST` للشبكة) (§5-غ).
+- مقارنة المفتاح **ثابتة الزمن** عبر `crypto.timingSafeEqual` (§5-ي).
+- تدقيق إلزامي في `/api/audit`: `arch.execute` · `hermes.chat.completions`/`hermes.train` · `projects.scan`/`projects.scan.denied` · `launcher.launch`/`embed`/`stop` · `commands.register` · `extensions.activate`/`deactivate` · `events.emit` (§5-ي).
+
+## 6. المكونات المترابطة
 
 | الوحدة | الموقع | الحالة |
 |---|---|---|
@@ -57,8 +66,9 @@
 | كرة الثلج | `host/snowball/` | **مربوطة** (مسارات §7-1 عولجت) |
 | اللانشر | `host/launcher/` | منقولة كما هي، معالجة مؤجلة §7 (ثغرة §5-0 أعلاه) |
 
-## 6. التحقق
+## 7. التحقق
 
-- `tsc --noEmit` نظيف · `npm test` **286/287** (الفاشل الوحيد بيئي: Firefox في `launch-desktop-command`).
-- `tests/agent-kernel-upper.test.ts` — 17/17.
+- `tsc --noEmit` نظيف · `npm test` **331/332** (الفاشل الوحيد بيئي: Firefox في `launch-desktop-command`).
+- `tests/agent-kernel-upper.test.ts` — 17/17 · `tests/lolbin-hardening.test.ts` — 9/9 · `tests/ollama-protocol.test.ts` — 5/5 · `tests/local-server-discovery.test.ts` — 11/11 · `tests/llm-discovery-boot.test.ts` — 4/4 · `tests/math-eval.test.ts` — 4/4 · `tests/finalize-5.test.ts` — 9/9 · `tests/host.test.ts` — 31/31 · `tests/system.test.ts` — 21/21.
+- **تجربة حية (§3-65 أُغلقت):** Ollama **0.32.1** على `127.0.0.1:11434` — الاكتشاف رصد السيرفر في **71ms** (17 نموذجاً عبر `/api/version`+`/api/tags`)، ومحادثة `POST /api/chat` حقيقية عبر `OllamaBackend` (qwen2.5:0.5b) ردّت في **5.1s** بusage فعلي.
 - **قيود بيئة التشغيل**: `bun test` يُسقط بتّات setuid (bun يُقنع `0o777`) — المرجع المعتمد **node/vitest** عبر `npm test`.

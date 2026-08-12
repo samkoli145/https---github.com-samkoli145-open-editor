@@ -56,6 +56,7 @@ export interface SubsystemHandles {
 export class NawatRuntime {
   private state: RuntimeState;
   private bootDurationMs: number = 0;
+  private lastSignalingLatencyMs: number = 0.8;
   public readonly disposables = new DisposableStore();
   public readonly pendingSyscalls = new Map<string, { reject: (reason: any) => void }>();
   public readonly syscallQueue = new AgentSyscallQueue();
@@ -113,7 +114,7 @@ export class NawatRuntime {
     const ctx = this.kernel.getContext();
     return {
       bootTimeMs: this.bootDurationMs,
-      signalingLatencyMs: 0.8, // Under 10ms budget
+      signalingLatencyMs: this.lastSignalingLatencyMs,
       memoryUsageMb: Math.round(mem.heapUsed / 1024 / 1024),
       activeTimers: ctx.scheduler.getActiveCount(),
       activeEventsCount: ctx.events.recent().length
@@ -164,7 +165,9 @@ export class NawatRuntime {
         try {
           let result: any;
           if (this.kernel.getContext().commands.has(sysName)) {
+            const signalStart = performance.now();
             const cmdRes = await this.kernel.getContext().commands.execute(sysName, sysPayload);
+            this.lastSignalingLatencyMs = performance.now() - signalStart;
             if (currentSyscall.isCanceled()) return;
             if (cmdRes.isOk) {
               result = cmdRes.value;

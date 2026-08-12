@@ -1,7 +1,18 @@
 import { Result, ok, err } from '../../kernel/core/result';
 import { EventBus } from '../../kernel/core/event-bus';
-import { LinuxArchExecutionLayer } from '../../agent-kernel/linux-arch-execution-layer';
+import { LinuxArchExecutionLayer, FORBIDDEN_GENERAL_INTERPRETERS } from '../../agent-kernel/linux-arch-execution-layer';
 import { LaunchRequest, LaunchResult, ProcessInfo, DisplayServer } from './types';
+
+/**
+ * allowlist صريح بأسماء الملفات النهائية المسموح إطلاقها عبر اللانشر (إصلاح §5-0).
+ * لا تُقبل أسماء/مسارات خارج هذه القائمة بغضّ النظر عن المسار الكامل — وأي مفسِّر
+ * عام (bash/sh/python/node...) محظور حتى لو وُجد هنا افتراضياً، لكونه «مُطلِقاً عاماً».
+ */
+export const LAUNCHER_ALLOWED_BINARIES = [
+  'xdg-open', 'xdg-mime', 'code', 'code-server', 'code-insiders',
+  'firefox', 'google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser',
+  'vim', 'nvim', 'sublime_text', 'subl', 'gedit', 'kate', 'gnome-text-editor',
+];
 
 export class ProcessLauncher {
   private activeProcesses = new Map<number, ProcessInfo>();
@@ -14,9 +25,22 @@ export class ProcessLauncher {
     this.displayServer = this.detectDisplayServer();
   }
 
+  /**
+   * بوابة الإطلاق الأساسية (إصلاح §5-0): ترفض أي binaryPath لا يمر عبر
+   * allowlist صريح لأسماء الملفات النهائية، وترفض المفسِّرات العامة
+   * (bash/sh/python/node... — فئة LOLBins) والمسارات خارج جذر التنفيذ.
+   * بغضّ النظر عن كون binaryPath مساراً كاملاً أو اسماً مجرداً.
+   */
   public async validateCommand(binaryPath: string): Promise<Result<void, Error>> {
     if (!binaryPath || binaryPath.trim() === '') {
       return err(new Error('Binary path is required'));
+    }
+    const basename = binaryPath.split('/').pop() || binaryPath;
+    if (FORBIDDEN_GENERAL_INTERPRETERS.includes(basename)) {
+      return err(new Error(`EPERM: '${basename}' is a general interpreter (bash/sh/python/node...): launching arbitrary interpreters is prohibited`));
+    }
+    if (!LAUNCHER_ALLOWED_BINARIES.includes(basename)) {
+      return err(new Error(`EPERM: binary '${basename}' is not in the launcher allowlist`));
     }
     const parsed = this.executionLayer.parseCommand(binaryPath);
     if (parsed.toolName === 'rm' && parsed.flags.some(f => f.includes('f') || f.includes('r'))) {

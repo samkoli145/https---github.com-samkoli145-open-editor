@@ -56,6 +56,7 @@ export interface LinuxCommandResult {
 export interface LinuxArchExecutionLayerOptions {
   allowedBinaries?: string[];
   authorizedSignatures?: string[];
+  forbiddenGeneralInterpreters?: string[];
   extraRules?: ConstraintRule[];
   defaultAgentId?: string;
   constraintEngine?: ConstraintEngine;
@@ -67,6 +68,17 @@ export interface LinuxArchExecutionLayerOptions {
   rejectSetuidSetgid?: boolean;
   isolateAbsoluteTargets?: boolean;
 }
+
+/**
+ * المفسِّرات العامة: أدوات «مُطلِقة عامة» بلا غرض محدّد — يُحظَر تنفيذها
+ * بمسار مطلق حتى لو كان ELF سليماً داخل جذر التنفيذ (فئة LOLBins:
+ * bash/sh/python/node... تُستغل كبوابة تنفيذ تعسفي).
+ */
+export const FORBIDDEN_GENERAL_INTERPRETERS = [
+  'bash', 'sh', 'dash', 'ash', 'zsh', 'ksh', 'csh', 'tcsh', 'fish',
+  'python', 'python2', 'python3', 'pypy', 'node', 'nodejs', 'deno', 'bun',
+  'perl', 'ruby', 'php', 'lua', 'luajit', 'tclsh', 'expect',
+];
 
 export interface LinuxArchRecord {
   request: LinuxCommandRequest;
@@ -111,12 +123,16 @@ export class LinuxArchExecutionLayer {
   private readonly enforceExecRoot: boolean;
   private readonly rejectSetuidSetgid: boolean;
   private readonly isolateAbsoluteTargets: boolean;
+  private readonly forbiddenGeneralInterpreters: Set<string>;
   private readonly records: LinuxArchRecord[] = [];
 
   constructor(options: LinuxArchExecutionLayerOptions = {}) {
     this.defaultAgentId = options.defaultAgentId ?? 'linux';
     this.allowedBinaries = options.allowedBinaries ?? [...DEFAULT_ALLOWED_BINARIES];
     this.authorizedSignatures = options.authorizedSignatures ?? [];
+    this.forbiddenGeneralInterpreters = new Set(
+      options.forbiddenGeneralInterpreters ?? FORBIDDEN_GENERAL_INTERPRETERS
+    );
     this.constraintEngine = options.constraintEngine ?? new ConstraintEngine();
     this.quotaGuard = options.quotaGuard ?? new ResourceQuotaGuard();
     this.maxExecutionTimeMs = options.maxExecutionTimeMs ?? 10000;
@@ -290,6 +306,18 @@ export class LinuxArchExecutionLayer {
       if (!inspected.executable) {
         return denied('blocked', `EPERM: '${parsed.toolName}' has no executable bit set`);
       }
+
+      // حظر المفسِّرات العامة حتى بمسار مطلق سليم (فئة LOLBins): يُفحص اسم الملف النهائي
+      // بغضّ النظر عن المسار الكامل — فـ /bin/bash و/usr/bin/python3 و/usr/bin/node هي
+      // «مُطلقات عامة» لا أدوات محددة الغرض، وتمريرها كمسار لا يعفيها من allowlist.
+      const basename = effectivePath.split('/').pop() ?? parsed.toolName;
+      if (this.forbiddenGeneralInterpreters.has(basename)) {
+        return denied(
+          'blocked',
+          `EPERM: '${parsed.toolName}' is a general interpreter ('${basename}') and is forbidden from direct path execution (LOLBin hardening)`
+        );
+      }
+
       if (inspected.kind === 'script') {
         const program = inspected.interpreter ? parseShebang(inspected.interpreter).program : '';
         if (!program) {

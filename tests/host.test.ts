@@ -111,9 +111,11 @@ describe('Host Layer & Bootloader (محمل الإقلاع والطبقة الم
       expect(bootloader.agentKernel).toBeDefined();
       expect(bootloader.agentKernel!.llm).toBeDefined();
 
-      const chatOut = await bootloader.agentKernel!.chat('hello-agent');
-      expect(typeof chatOut).toBe('string');
-      expect(chatOut.length).toBeGreaterThan(0);
+      const chatOut = await bootloader.agentKernel!.chat('agent-1', [{ role: 'user', content: 'hello-agent' }]);
+      expect(chatOut.isOk).toBe(true);
+      if (chatOut.isOk) {
+        expect(chatOut.value.content.length).toBeGreaterThan(0);
+      }
 
       const cmdRes = await runtime.executeCommand('agent.llm.chat', { msg: 'how are you' });
       expect(cmdRes.output).toBeTruthy();
@@ -241,6 +243,30 @@ describe('Host Layer & Bootloader (محمل الإقلاع والطبقة الم
       events.forEach((e, i) => {
         expect((e.payload as any).id).toBeTruthy();
       });
+
+      await bootloader.shutdown();
+    });
+
+    it('signalingLatencyMs is measured (not a hardcoded constant) after a real syscall (§5-ب)', async () => {
+      const bootloader = new Bootloader({ profile: 'agent' });
+      const runtime = await bootloader.boot();
+
+      runtime.kernel.getContext().commands.register({
+        id: 'lat.sys',
+        title: { ar: 'كَمون', en: 'Latency' },
+        category: { ar: 'مؤقت', en: 'Temp' },
+        description: { ar: '', en: '' },
+        handler: (payload: any) => ({ echoed: payload })
+      });
+
+      const initial = runtime.getMetrics().signalingLatencyMs;
+      expect(initial).toBeGreaterThanOrEqual(0);
+
+      await runtime.executeSyscall('lat.sys', { tag: 'latency-probe' });
+      const measured = runtime.getMetrics().signalingLatencyMs;
+
+      expect(Number.isFinite(measured)).toBe(true);
+      expect(measured).toBeGreaterThan(0);
 
       await bootloader.shutdown();
     });

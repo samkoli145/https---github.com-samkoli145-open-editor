@@ -263,25 +263,54 @@ describe('Nawat System Layer - Storage & VFS Infrastructure', () => {
         expect(saveRes.error.message).toContain('ESECURITY_VIOLATION');
       }
     });
+
+    it('writes each key once (sanitized only) and operates consistently on it (§5-د)', async () => {
+      const storage = new SafeSystemStorageEngine();
+      const saveRes = await storage.save('sess_five.json', { tag: 'once' });
+      expect(saveRes.isOk).toBe(true);
+
+      // لا نسخة خام مكررة — المفتاح الوحيد هو المُنقّى
+      const sanitized = '/vfs/storage/sess_five.json';
+      expect((storage as any).store.has('sess_five.json')).toBe(false);
+      expect((storage as any).store.has(sanitized)).toBe(true);
+
+      // load/exists/delete تعمل عبر المفتاح المُنقّى فقط
+      expect(await storage.exists('sess_five.json')).toBe(true);
+      const loadRes = await storage.load<{ tag: string }>('sess_five.json');
+      expect(loadRes.isOk).toBe(true);
+      if (loadRes.isOk) expect(loadRes.value.tag).toBe('once');
+
+      const delRes = await storage.delete('sess_five.json');
+      expect(delRes.isOk).toBe(true);
+      expect(await storage.exists('sess_five.json')).toBe(false);
+      expect((storage as any).store.size).toBe(0);
+    });
   });
 
   // -------------------------------------------------------------------
   // 5. Execution Sandbox Engine (Deterministic POSIX & LLM Over-Refusal Shield)
   // -------------------------------------------------------------------
   describe('Execution Sandbox Engine', () => {
-    it('verifies POSIX permissions and executes authorized scripts safely', async () => {
-      const indexer = new PersistentIndexer('/vfs');
-      const elfHeader = new Uint8Array([0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00]);
+    it('verifies POSIX permissions and executes authorized scripts via the arch layer', async () => {
+      const tmp = mkdtempSync(join(tmpdir(), 'nawat-sandbox-'));
+      try {
+        const scriptPath = join(tmp, 'safe_task');
+        const script = '#!/usr/bin/env node\nprocess.stdout.write("inode_ok");';
+        writeFileSync(scriptPath, script, { mode: 0o755 });
 
-      indexer.registerFile('/vfs/bin/safe_task', elfHeader, 'hash_task', 0o755, 1000, 1000);
+        const indexer = new PersistentIndexer(tmp);
+        indexer.registerFile(scriptPath, script, 'hash_task', 0o755, 1000, 1000);
 
-      const sandbox = new ExecutionSandboxEngine({ engineId: 'sandbox_v1', indexer });
-      const execRes = await sandbox.execute({ path: '/vfs/bin/safe_task', uid: 1000 });
+        const sandbox = new ExecutionSandboxEngine({ engineId: 'sandbox_v1', indexer, execRoot: tmp });
+        const execRes = await sandbox.execute({ path: scriptPath, uid: 1000 });
 
-      expect(execRes.isOk).toBe(true);
-      if (execRes.isOk) {
-        expect(execRes.value.exitCode).toBe(0);
-        expect(execRes.value.stdout).toContain('inode_');
+        expect(execRes.isOk).toBe(true);
+        if (execRes.isOk) {
+          expect(execRes.value.exitCode).toBe(0);
+          expect(execRes.value.stdout).toContain('inode_ok');
+        }
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
       }
     });
 
