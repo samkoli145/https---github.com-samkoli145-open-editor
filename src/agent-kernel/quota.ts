@@ -5,6 +5,8 @@ export interface ResourceQuota {
   maxSyscallsPerMinute?: number;
   maxErrorThreshold?: number;
   maxExecutionTimeMs?: number;
+  /** سقف العمليات المتزامنة لكل وكيل (pids.max — منع Fork-Bomb) */
+  maxChildProcesses?: number;
   /** سقف استهلاك ذاكرة الكارت (VRAM) المدمج مع InferenceGovernor */
   maxVramUsageMb?: number;
   /** حد الاستدلالات المتزامنة (مدمج مع InferenceMutex) */
@@ -16,6 +18,8 @@ export interface AgentResourceUsage {
   memoryBytes: number;
   syscallCount: number;
   errorCount: number;
+  /** العمليات المتزامنة النشطة حالياً لهذا الوكيل (pids.max) */
+  activeProcesses: number;
   lastResetAt: number;
 }
 
@@ -28,10 +32,11 @@ export class ResourceQuotaGuard {
   private usageMap = new Map<string, AgentResourceUsage>();
 
   private defaultQuota: ResourceQuota = {
-    maxMemoryBytes: 50 * 1024 * 1024, // 50MB
+    maxMemoryBytes: undefined, // حاكم الذاكرة اختياري: لا حد افتراضي كي لا يكسر أعباء العمل الحقيقية
     maxSyscallsPerMinute: 120,
     maxErrorThreshold: 10,
-    maxExecutionTimeMs: 10000
+    maxExecutionTimeMs: 10000,
+    maxChildProcesses: 10
   };
 
   public setQuota(agentId: string, quota: ResourceQuota): void {
@@ -46,6 +51,7 @@ export class ResourceQuotaGuard {
         memoryBytes: 0,
         syscallCount: 0,
         errorCount: 0,
+        activeProcesses: 0,
         lastResetAt: Date.now()
       };
       this.usageMap.set(agentId, usage);
@@ -58,6 +64,25 @@ export class ResourceQuotaGuard {
     }
 
     return usage;
+  }
+
+  /** حجز فتحة عملية متزامنة (pids.max): رفض فوري عند بلوغ سقف الأبناء النشطين */
+  public acquireProcessSlot(agentId: string): Result<void, Error> {
+    const quota = this.quotas.get(agentId) || this.defaultQuota;
+    const usage = this.getUsage(agentId);
+
+    if (quota.maxChildProcesses !== undefined && usage.activeProcesses >= quota.maxChildProcesses) {
+      return err(new Error(`EAGAIN: Agent '${agentId}' reached maximum concurrent processes limit (${quota.maxChildProcesses})`));
+    }
+
+    usage.activeProcesses++;
+    return ok(undefined);
+  }
+
+  /** تحرير فتحة العملية بعد خروجها (في finally مهما حدث) */
+  public releaseProcessSlot(agentId: string): void {
+    const usage = this.getUsage(agentId);
+    usage.activeProcesses = Math.max(0, usage.activeProcesses - 1);
   }
 
   public trackSyscall(agentId: string): Result<void, Error> {

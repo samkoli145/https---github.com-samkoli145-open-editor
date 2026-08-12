@@ -677,5 +677,34 @@ describe('Nawat LinuxArchExecutionLayer (Arch Linux Kernel Execution Layer)', ()
       expect(lastRecord.status).toBe('success');
       expect(lastRecord.parsedTool.toolName).toBe('echo');
     });
+
+    it('rejects when maxChildProcesses is reached and releases the slot on completion (pids.max)', async () => {
+      const guard = new ResourceQuotaGuard();
+      guard.setQuota('test-agent', { maxChildProcesses: 1 });
+      const layer = new LinuxArchExecutionLayer({ execRoot: TMP, quotaGuard: guard });
+
+      guard.acquireProcessSlot('test-agent');
+      const blocked = await layer.execute({ commandLine: 'echo overflow', cwd: TMP, agentId: 'test-agent' });
+      expect(blocked.status).toBe('blocked');
+      expect(blocked.reason).toContain('EAGAIN');
+      expect(blocked.reason).toContain('reached maximum concurrent processes limit');
+
+      guard.releaseProcessSlot('test-agent');
+      const recovered = await layer.execute({ commandLine: 'echo recovered', cwd: TMP, agentId: 'test-agent' });
+      expect(recovered.status).toBe('success');
+      expect(recovered.stdout).toContain('recovered');
+      expect(guard.getUsage('test-agent').activeProcesses).toBe(0);
+    });
+
+    it('rejects when maxMemoryBytes budget is exceeded (memory.max)', async () => {
+      const guard = new ResourceQuotaGuard();
+      guard.setQuota('memory-agent', { maxMemoryBytes: 10 });
+      const layer = new LinuxArchExecutionLayer({ execRoot: TMP, quotaGuard: guard });
+
+      const res = await layer.execute({ commandLine: 'echo memory-test', cwd: TMP, agentId: 'memory-agent' });
+      expect(res.status).toBe('blocked');
+      expect(res.reason).toContain('EOM');
+      expect(res.reason).toContain('exceeded maximum allowed memory budget');
+    });
   });
 });

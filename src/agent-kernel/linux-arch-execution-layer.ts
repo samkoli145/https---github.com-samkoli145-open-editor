@@ -270,6 +270,13 @@ export class LinuxArchExecutionLayer {
       return denied('blocked', syscallRes.error.message);
     }
 
+    // حجز فتحة عملية متزامنة (pids.max): رفض فوري عند بلوغ سقف الأبناء النشطين
+    const slotRes = this.quotaGuard.acquireProcessSlot(agentId);
+    if (slotRes.isErr) {
+      return denied('blocked', slotRes.error.message);
+    }
+
+    try {
     const budgetMs = Math.max(1, Math.min(request.timeoutMs ?? this.maxExecutionTimeMs, this.maxExecutionTimeMs));
 
     // عزل نظامي (فجوة س): جذر تنفيذ إلزامي — root = execRoot إن حُدّد، وإلا cwd الطلب، وإلا مجلد العمل الحالي.
@@ -436,6 +443,14 @@ export class LinuxArchExecutionLayer {
 
     const { stdout, stderr, exitCode, status, reason } = outcome;
 
+    // حاكم الذاكرة (memory.max): احتساب بصمة التنفيذ عبر حجم حائل المخرجات.
+    // يبقى اختيارياً (maxMemoryBytes غير محدد افتراضياً) — لا يُقيّد أعباء العمل الحقيقية.
+    const outputBytes = Buffer.byteLength(stdout) + Buffer.byteLength(stderr);
+    const memRes = this.quotaGuard.trackMemory(agentId, outputBytes);
+    if (memRes.isErr) {
+      return denied('blocked', memRes.error.message);
+    }
+
     if (status === 'error' || status === 'timeout') {
       const errorRes = this.quotaGuard.trackError(agentId);
       if (errorRes.isErr) {
@@ -447,6 +462,9 @@ export class LinuxArchExecutionLayer {
     this.records.push({ request, parsedTool: parsed, status, verdict: 'allowed', reason, effectiveRoot, timestamp: started });
 
     return this.buildResult(request, parsed, status, 'allowed', exitCode, stdout, stderr, executionTimeMs, reason, warnings, agentId, budgetMs);
+    } finally {
+      this.quotaGuard.releaseProcessSlot(agentId);
+    }
   }
 
   public getHistory(): LinuxCommandRequest[] {

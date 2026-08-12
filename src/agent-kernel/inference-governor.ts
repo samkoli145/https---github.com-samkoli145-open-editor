@@ -35,12 +35,12 @@ export class DefaultResourceProbe implements ResourceProbe {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: modelName })
       });
-      if (!res.ok) return 4000; // Fallback estimate (4GB)
+      if (!res.ok) return 0; // النموذج غير موجود أو غير معروف — بلا دليل، لا يُمنع
       const data = (await res.json()) as any;
-      const sizeBytes = data.size || 4000 * 1024 * 1024;
+      const sizeBytes = typeof data?.size === 'number' ? data.size : 0;
       return Math.ceil(sizeBytes / (1024 * 1024));
     } catch {
-      return 4000; // Fallback estimate
+      return 0; // بلا دليل (شبكة/خدمة) — لا نرفض حدساً، سيُعالج الخطأ عند chat نفسه
     }
   }
 }
@@ -129,7 +129,7 @@ export class InferenceGovernor {
     const safeThreshold = availableVram * this.options.vramSafetyMargin;
     const modelSize = await this.probe.getModelSizeMb(modelName, this.options.baseUrl);
 
-    if (modelSize > safeThreshold) {
+    if (modelSize > 0 && modelSize > safeThreshold) {
       return err(new Error(`ERR_VRAM_OVERFLOW: Model '${modelName}' (~${modelSize}MB) exceeds safe VRAM threshold (${safeThreshold}MB)`));
     }
 

@@ -73,7 +73,7 @@ describe('§4-7 — Inference Governor (حوكمة موارد الاستدلال
       expect(freeMb).toBeGreaterThan(0);
     });
 
-    it('يقدر حجم النموذج افتراضياً (4000MB) عند تعذر /api/show', async () => {
+    it('يعيد 0 (بلا دليل) لحجم النموذج عند تعذر /api/show — لا رفض حدسي', async () => {
       vi.stubGlobal(
         'fetch',
         vi.fn(async () => {
@@ -82,7 +82,7 @@ describe('§4-7 — Inference Governor (حوكمة موارد الاستدلال
       );
       const probe = new DefaultResourceProbe();
       const size = await probe.getModelSizeMb('llama3.2', 'http://127.0.0.1:11434');
-      expect(size).toBe(4000);
+      expect(size).toBe(0);
       vi.unstubAllGlobals();
     });
   });
