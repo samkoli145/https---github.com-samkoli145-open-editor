@@ -11,6 +11,7 @@ import { LLMCore, DeterministicBackend } from '../agent-kernel/llm-core';
 import { SessionManager } from '../agent-kernel/session';
 import { ResourceQuotaGuard } from '../agent-kernel/quota';
 import { EditorManager } from './editor-manager';
+import { SnowballEngine } from './snowball';
 import { LanguageServerProtocolAdapter } from './lsp-adapter';
 
 export interface BootOptions {
@@ -119,7 +120,7 @@ export class Bootloader {
 
       this._kernel = new Kernel();
 
-      const subsystems: { agentKernel?: any; hermes?: any; editor?: any } = {};
+      const subsystems: { agentKernel?: any; hermes?: any; editor?: any; snowball?: any } = {};
 
       // نواة وكيل حقيقية (بدل mock): LLMCore + ToolRegistry (موصول بسجل الأوامر) + SessionManager (موصول بالحصص)
       if (this._profileConfig.enableAgentKernel) {
@@ -184,6 +185,17 @@ export class Bootloader {
         };
       }
 
+      const snowballEngine = new SnowballEngine();
+      subsystems.snowball = {
+        name: 'SnowballEngine',
+        status: 'active',
+        engine: snowballEngine,
+        getMetrics: () => snowballEngine.getMetrics(),
+        record: (type: any, source: string, payload: any, ctx?: any) => snowballEngine.recordInteraction(type, source, payload, ctx),
+        predict: (ctx: any) => snowballEngine.predict(ctx),
+        recall: (q: any) => snowballEngine.recall(q)
+      };
+
       if (this._profileConfig.enableEditor) {
         const editorManager = new EditorManager();
         editorManager.scanSystemForEditors();
@@ -195,6 +207,7 @@ export class Bootloader {
           manager: editorManager,
           editorManager,
           lspAdapter,
+          snowball: snowballEngine,
           scan: () => editorManager.getDiscoveredTools(),
           openFile: (filePath: string, line?: number, toolId?: string) => editorManager.openFile(filePath, line, toolId),
           dispatch: (intent: any, payload: any) => editorManager.dispatchIntent(intent, payload)
@@ -271,6 +284,30 @@ export class Bootloader {
             if (!ed?.lspAdapter) return [];
             const res = await ed.lspAdapter.getDiagnostics(p?.path || p?.filePath || 'server.ts');
             return res.isOk ? res.value : [];
+          }
+        });
+
+        ctx.commands.register({
+          id: 'host.snowball.metrics',
+          title: { ar: 'مؤشرات محرك كرة الثلج المعرفي', en: 'Snowball Engine Metrics' },
+          category: { ar: 'التعلم الذاتي', en: 'Snowball Learning' },
+          description: { ar: 'عرض إحصائيات التراكم المعرفي والتنبؤات', en: 'Get snowball engine metrics and layers' },
+          handler: () => {
+            const sb = this._runtime?.snowball;
+            return sb ? sb.getMetrics() : { totalInteractions: 0, totalKnowledge: 0 };
+          }
+        });
+
+        ctx.commands.register({
+          id: 'host.snowball.record',
+          title: { ar: 'تسجيل تفاعل في محرك التعلم', en: 'Record Snowball Interaction' },
+          category: { ar: 'التعلم الذاتي', en: 'Snowball Learning' },
+          description: { ar: 'تسجيل حدث واستخراج أنماط التعلم', en: 'Record interaction and extract patterns' },
+          handler: async (p: any) => {
+            const sb = this._runtime?.snowball;
+            if (!sb) return { error: 'Snowball engine unavailable' };
+            const res = await sb.record(p?.type || 'command_executed', p?.source || 'cli', p?.payload || {}, p?.ctx);
+            return res.isOk ? res.value : { error: res.error.message };
           }
         });
       }

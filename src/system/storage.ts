@@ -131,6 +131,33 @@ export class SafeSystemStorageEngine implements ISystemStorageEngine {
     return ok(undefined);
   }
 
+  public async append<T>(key: string, item: T): Promise<Result<void, Error>> {
+    const existingRes = await this.load<T[]>(key);
+    const list: T[] = existingRes.isOk && Array.isArray(existingRes.value) ? existingRes.value : [];
+    list.push(item);
+    if (list.length > this.maxRecords) {
+      list.shift();
+    }
+    return this.save<T[]>(key, list);
+  }
+
+  public async list<T>(keyPrefix: string): Promise<Result<T[], Error>> {
+    const listRes = await this.load<T[]>(keyPrefix);
+    if (listRes.isOk && Array.isArray(listRes.value)) {
+      return listRes;
+    }
+    const matching: T[] = [];
+    for (const [k] of this.store.entries()) {
+      if (k.startsWith(keyPrefix)) {
+        const itemRes = await this.load<T>(k);
+        if (itemRes.isOk) {
+          matching.push(itemRes.value);
+        }
+      }
+    }
+    return ok(matching);
+  }
+
   public clear(): void {
     this.store.clear();
   }

@@ -50,6 +50,7 @@ export interface SubsystemHandles {
   agentKernel?: Record<string, any>;
   hermes?: Record<string, any>;
   editor?: Record<string, any>;
+  snowball?: Record<string, any>;
 }
 
 export class NawatRuntime {
@@ -62,6 +63,7 @@ export class NawatRuntime {
   public agentKernel?: Record<string, any>;
   public hermes?: Record<string, any>;
   public editor?: Record<string, any>;
+  public snowball?: Record<string, any>;
 
   constructor(
     public readonly kernel: Kernel,
@@ -74,6 +76,7 @@ export class NawatRuntime {
     this.agentKernel = subsystems.agentKernel;
     this.hermes = subsystems.hermes;
     this.editor = subsystems.editor;
+    this.snowball = subsystems.snowball;
   }
 
   public getContext(): KernelContext {

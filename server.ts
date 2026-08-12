@@ -16,6 +16,7 @@ import {
   HermesKernel,
   LLMCore,
   DeterministicBackend,
+  LauncherManager,
   type LocalizedString,
   type Extension
 } from './src/index';
@@ -51,6 +52,7 @@ async function startServer() {
 
   // LinuxArchExecutionLayer — تنفيذ أوامر أرش/ELF/سكربتات عبر بوابات النواة (عزل إلزامي داخل جذر المشروع)
   const archLayer = new LinuxArchExecutionLayer({ defaultAgentId: 'web-arch', execRoot: process.cwd() });
+  const launcherManager = new LauncherManager(context.events, context.commands, archLayer);
 
   // Middleware guard for API readiness
   app.use('/api', (_req, res, next) => {
@@ -577,6 +579,151 @@ app.get('/api/lsp/diagnostics', async (req, res) => {
     return res.json({ diagnostics: result.value });
   }
   res.json({ diagnostics: [] });
+});
+
+// Launcher & App Embedding API
+app.get('/api/launcher/scan-internet-apps', async (_req, res) => {
+  const scanResult = await launcherManager.scanInternetApps();
+  if (scanResult.isOk) {
+    res.json({
+      success: true,
+      count: scanResult.value.length,
+      apps: scanResult.value,
+      internetApps: launcherManager.getInternetApps()
+    });
+  } else {
+    res.status(500).json({ error: scanResult.error.message });
+  }
+});
+
+app.get('/api/launcher/internet-apps', (_req, res) => {
+  res.json(launcherManager.getInternetApps());
+});
+
+app.get('/api/launcher/programs', (_req, res) => {
+  res.json([
+    {
+      id: 'vscode',
+      name: 'VS Code (Visual Studio Code / OpenCPDE)',
+      icon: '📝',
+      binaryPath: '/usr/bin/code',
+      args: ['--no-sandbox', '--disable-gpu', '.'],
+      running: launcherManager.getProcesses().some(p => p.programId === 'vscode'),
+      type: 'gui',
+      webPort: 8080
+    },
+    {
+      id: 'code-server',
+      name: 'VS Code Web Server',
+      icon: '⚡',
+      binaryPath: 'code-server',
+      args: ['--port', '8080', '--auth', 'none', '.'],
+      running: launcherManager.getProcesses().some(p => p.programId === 'code-server'),
+      type: 'web',
+      webPort: 8080
+    },
+    {
+      id: 'terminal',
+      name: 'Linux Arch Terminal Shell',
+      icon: '💻',
+      binaryPath: '/bin/bash',
+      args: [],
+      running: launcherManager.getProcesses().some(p => p.programId === 'terminal'),
+      type: 'cli'
+    }
+  ]);
+});
+
+app.post('/api/launcher/launch', async (req, res) => {
+  const { programId, mode, binaryPath, args, cwd, env, timeout } = req.body ?? {};
+  if (!programId) return res.status(400).json({ error: 'programId is required' });
+
+  const reqPath = binaryPath || (programId === 'vscode' ? 'code' : programId === 'code-server' ? 'code-server' : '/bin/bash');
+  const result = await launcherManager.launch({
+    programId,
+    mode: mode || 'managed',
+    binaryPath: reqPath,
+    args: args || [],
+    workingDirectory: cwd,
+    env: env || {},
+    timeout
+  });
+
+  if (result.isOk) {
+    audit('launcher.launch', `programId='${programId}' pid=${result.value.pid}`);
+    res.json(result.value);
+  } else {
+    res.status(400).json({ error: result.error.message });
+  }
+});
+
+app.post('/api/launcher/embed', async (req, res) => {
+  const { programId, containerId, mode, binaryPath, args, embedStrategy } = req.body ?? {};
+  if (!programId || !containerId) return res.status(400).json({ error: 'programId and containerId are required' });
+
+  const reqPath = binaryPath || (programId === 'vscode' ? 'code' : programId === 'code-server' ? 'code-server' : '/bin/bash');
+  const result = await launcherManager.launchAndEmbed({
+    programId,
+    mode: mode || 'embedded',
+    binaryPath: reqPath,
+    args: args || [],
+    embedStrategy: embedStrategy || 'auto'
+  }, containerId);
+
+  if (result.isOk) {
+    audit('launcher.embed', `programId='${programId}' containerId='${containerId}'`);
+    res.json(result.value);
+  } else {
+    res.status(400).json({ error: result.error.message });
+  }
+});
+
+app.post('/api/launcher/stop', async (req, res) => {
+  const { pid } = req.body ?? {};
+  if (!pid) return res.status(400).json({ error: 'pid is required' });
+  const result = await launcherManager.stop(Number(pid));
+  if (result.isOk) {
+    audit('launcher.stop', `pid=${pid}`);
+    res.json({ success: true, message: `Process ${pid} stopped` });
+  } else {
+    res.status(400).json({ error: result.error.message });
+  }
+});
+
+app.get('/api/launcher/processes', (_req, res) => {
+  res.json(launcherManager.getProcesses());
+});
+
+// Snowball Engine API Endpoints
+app.get('/api/snowball/metrics', (_req, res) => {
+  const sb = runtime?.snowball;
+  if (sb) {
+    return res.json(sb.getMetrics());
+  }
+  res.json({ totalInteractions: 0, totalKnowledge: 0, patternsDiscovered: 0 });
+});
+
+app.post('/api/snowball/record', async (req, res) => {
+  const sb = runtime?.snowball;
+  if (!sb) {
+    return res.status(500).json({ error: 'Snowball engine unavailable' });
+  }
+  const { type, source, payload, context } = req.body || {};
+  const result = await sb.record(type || 'file_opened', source || 'web_dashboard', payload || {}, context || {});
+  if (result.isOk) {
+    return res.json(result.value);
+  }
+  res.status(400).json({ error: result.error.message });
+});
+
+app.post('/api/snowball/predict', (req, res) => {
+  const sb = runtime?.snowball;
+  if (!sb) {
+    return res.status(500).json({ error: 'Snowball engine unavailable' });
+  }
+  const { context } = req.body || {};
+  const predictions = sb.predict(context || {});
+  res.json({ predictions });
 });
 
 // Web UI Dashboard Endpoint
