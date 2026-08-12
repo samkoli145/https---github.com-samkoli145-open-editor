@@ -742,6 +742,19 @@ app.post('/api/snowball/predict', (req, res) => {
   res.json({ predictions });
 });
 
+// مخطط النواة المرجعي — يعرض docs/BLUEPRINT.md في الواجهة الأمامية
+app.get('/api/docs/blueprint', (_req, res) => {
+  try {
+    const blueprintPath = path.join(process.cwd(), 'docs', 'BLUEPRINT.md');
+    if (!existsSync(blueprintPath)) {
+      return res.status(404).json({ ok: false, error: 'BLUEPRINT.md غير موجود' });
+    }
+    res.json({ ok: true, content: readFileSync(blueprintPath, 'utf8') });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String((err as Error).message || err) });
+  }
+});
+
 // Web UI Dashboard Endpoint
 app.get('/', (_req, res) => {
   res.send(`<!DOCTYPE html>
@@ -1093,6 +1106,11 @@ app.get('/', (_req, res) => {
           <span class="text-xs">العقل الموجه</span>
         </button>
 
+        <button onclick="switchTab('blueprint')" id="tab-blueprint" class="p-2.5 rounded-lg border text-right transition flex flex-col items-center justify-center text-center gap-1 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
+          <span class="text-lg">📐</span>
+          <span class="text-xs">المخطط</span>
+        </button>
+
         <button onclick="switchTab('arch')" id="tab-arch" class="p-2.5 rounded-lg border text-right transition flex flex-col items-center justify-center text-center gap-1 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100">
           <span class="text-lg">💻</span>
           <span class="text-xs">منفذ Arch</span>
@@ -1436,6 +1454,19 @@ app.get('/', (_req, res) => {
       </div>
     </div>
 
+    <div id="view-blueprint" class="hidden space-y-4">
+      <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-xs space-y-5">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xl">📐</span>
+            <h2 class="text-base font-bold text-slate-900">المخطط المرجعي للنواة (Kernel Blueprint)</h2>
+          </div>
+          <span class="text-xs bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full font-semibold border border-indigo-200">docs/BLUEPRINT.md</span>
+        </div>
+        <pre id="blueprint-content" class="text-xs leading-relaxed text-slate-800 whitespace-pre-wrap font-mono bg-slate-50 border border-slate-200 rounded-xl p-4 max-h-[70vh] overflow-auto" dir="rtl">جاري تحميل المخطط…</pre>
+      </div>
+    </div>
+
   </main>
 
   <!-- CachyOS KDE Plasma Bottom Taskbar Panel -->
@@ -1745,6 +1776,7 @@ app.get('/', (_req, res) => {
 
     const appTitlesMap = {
       'orchestrator': { title: 'Orchestrator Kernel & Tools', icon: '🎛️' },
+      'blueprint': { title: 'Kernel Blueprint', icon: '📐' },
       'dolphin': { title: 'Dolphin File Browser', icon: '📁' },
       'arch': { title: 'Arch Exec Layer', icon: '💻' },
       'commands': { title: 'Commands Registry', icon: '⚡' },
@@ -1757,7 +1789,7 @@ app.get('/', (_req, res) => {
     };
 
     function switchTab(tab) {
-      const allTabs = ['orchestrator', 'dolphin', 'arch', 'commands', 'scan', 'extensions', 'events', 'scheduler', 'i18n', 'help'];
+      const allTabs = ['orchestrator', 'blueprint', 'dolphin', 'arch', 'commands', 'scan', 'extensions', 'events', 'scheduler', 'i18n', 'help'];
       allTabs.forEach(t => {
         const viewEl = document.getElementById('view-' + t);
         if (viewEl) viewEl.classList.add('hidden');
@@ -1833,7 +1865,7 @@ app.get('/', (_req, res) => {
     }
 
     function switchTab(tab) {
-      const allTabs = ['dolphin', 'arch', 'commands', 'scan', 'extensions', 'events', 'scheduler', 'i18n', 'help'];
+      const allTabs = ['blueprint', 'dolphin', 'arch', 'commands', 'scan', 'extensions', 'events', 'scheduler', 'i18n', 'help'];
       allTabs.forEach(t => {
         const viewEl = document.getElementById('view-' + t);
         if (viewEl) viewEl.classList.add('hidden');
@@ -1868,6 +1900,7 @@ app.get('/', (_req, res) => {
         document.getElementById('metric-scheduler').innerText = kData.activeSchedulerCount;
 
         if (currentTab === 'orchestrator') loadDiscoveredTools();
+        if (currentTab === 'blueprint') loadBlueprint();
         if (currentTab === 'commands') loadCommands();
         if (currentTab === 'events') loadEvents();
         if (currentTab === 'extensions') loadExtensions();
@@ -1914,6 +1947,23 @@ app.get('/', (_req, res) => {
         }).join('');
       } catch (e) {
         console.error('Tools scan error:', e);
+      }
+    }
+
+    async function loadBlueprint() {
+      try {
+        const res = await fetch('/api/docs/blueprint');
+        const data = await res.json();
+        const el = document.getElementById('blueprint-content');
+        if (!el) return;
+        if (!data.ok) {
+          el.innerText = 'تعذر تحميل المخطط: ' + (data.error || res.status);
+          return;
+        }
+        el.innerText = data.content;
+      } catch (e) {
+        const el = document.getElementById('blueprint-content');
+        if (el) el.innerText = 'خطأ في تحميل المخطط: ' + e.message;
       }
     }
 

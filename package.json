@@ -2,6 +2,7 @@
   "name": "open-editor",
   "version": "0.1.0",
   "description": "Open Editor — محرر كود معياري ذكي (نواة + عقل + منطق) كنموذج مستقل قابل للنشر",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
