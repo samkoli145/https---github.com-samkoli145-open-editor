@@ -1,6 +1,15 @@
 export { AgentSyscall, AgentSyscallQueue } from './syscalls';
 export type { AgentSyscallOptions, AgentSyscallPriority, AgentSyscallStatus } from './syscalls';
 
+export { AgentKernel, AGENT_KERNEL_COMMANDS } from './agent-kernel';
+export type { AgentKernelOptions, AgentCommandSpec, AgentCommandType, AgentManagedType, AgentManagedEngine, AgentKernelStatus, AgentKernelState, LLMChatResult } from './agent-kernel';
+
+export { AccessManager } from './access';
+export type { AccessPolicy, PolicySummary } from './access';
+
+export { AgentScheduler } from './scheduler';
+export type { SyscallHandler, SyscallHandlers, SchedulerMode, AgentSchedulerOptions, SchedulerStats } from './scheduler';
+
 export { ToolRegistry } from './tools';
 export type { ToolDefinition, ToolExecutionContext } from './tools';
 

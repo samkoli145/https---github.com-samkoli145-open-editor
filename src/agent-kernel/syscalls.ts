@@ -123,6 +123,16 @@ export class AgentSyscallQueue {
     return undefined;
   }
 
+  public peek(): AgentSyscall | undefined {
+    const priorities: AgentSyscallPriority[] = ['high', 'normal', 'low', 'background'];
+    for (const p of priorities) {
+      if (this.queues[p].length > 0) {
+        return this.queues[p][0];
+      }
+    }
+    return undefined;
+  }
+
   public getPendingCount(): number {
     return (
       this.queues.high.length +

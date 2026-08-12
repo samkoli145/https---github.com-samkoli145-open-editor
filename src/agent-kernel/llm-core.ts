@@ -102,6 +102,24 @@ export class LLMCore {
       : [new OllamaBackend()];
   }
 
+  /** قائمة خلفيات LLM المتاحة (اسم + نموذج) */
+  public availableModels(): { name: string; model: string }[] {
+    return this.backends.map((b) => ({ name: b.name, model: b.model }));
+  }
+
+  /** فحص صحة خلفيات LLM: سليمة إن نجحت أي منها */
+  public async health(): Promise<boolean> {
+    for (const backend of this.backends) {
+      try {
+        const res = await backend.chat([{ role: 'user', content: 'ping' }]);
+        if (res.isOk) return true;
+      } catch (e: any) {
+        // continue to next backend
+      }
+    }
+    return false;
+  }
+
   public async chat(messages: LLMMessage[]): Promise<Result<LLMReply, Error>> {
     if (this.backends.length === 0) {
       return err(new Error('ENOENT: No LLM backends registered'));

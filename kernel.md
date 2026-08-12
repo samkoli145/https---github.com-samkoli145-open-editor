@@ -87,7 +87,7 @@
 
 ```
 kernel-project/
-├── src/                              (57 ملفاً · ~5370 سطراً)
+├── src/                              (79 ملفاً · ~10.3 ألف سطر)
 │   ├── index.ts                      ← برميل التصدير: kernel + host + agent-kernel + system
 │   ├── kernel/                       ← الميكانيكا (نواة P): kernel.ts · core/result · event-bus ·
 │   │   │                                 disposable · types · cache · i18n/localized-string ·
@@ -97,7 +97,15 @@ kernel-project/
 │   ├── host/                         ← المستضيف (NEW): bootloader (bootNawat) · runtime
 │   │   │                                 (NawatRuntime + آلة حالة + مقاييس) · profiles (4 أنماط) ·
 │   │   │                                 vfs · config-loader · editor-manager (العقل الموجّه:
-│   │   │                                 اكتشاف أدوات النظام + توجيه) · lsp-adapter
+│   │   │                                 اكتشاف أدوات النظام + توجيه) · lsp-adapter ·
+│   │   │                                 snowball (كرة الثلج المعرفية: snowball-engine ·
+│   │   │                                 interaction-tracker · knowledge-layer ·
+│   │   │                                 pattern-extractor · predictive-model) ·
+│   │   │                                 launcher (SystemAppLauncher: process-launcher ·
+│   │   │                                 window-embedder · web-embedder · launcher-manager ·
+│   │   │                                 desktop-scanner · ui-templates) ·
+│   │   │                                 discovery (INIParser · desktop-entry-scanner ·
+│   │   │                                 mime-resolver · program-catalog)
 │   │   └── index.ts
 │   ├── agent-kernel/                 ← النواة العليا (AIOS):
 │   │   ├── llm-core.ts               ← LLMCore + OllamaBackend + DeterministicBackend
@@ -125,13 +133,18 @@ kernel-project/
 │       │                                 (base-engine · execution-sandbox) · storage
 │       └── index.ts
 ├── bin/nawat.ts                      ← CLI: nawat boot [--profile=…] · status · profiles
-├── server.ts                         ← خادم Express: host/agent/hermes + REST (arch + projects/scan + orchestrator/LSP)
-├── tests/                            ← 15 ملفات · 255 اختباراً:
+├── server.ts                         ← خادم Express: host/agent/hermes + REST (arch + projects/scan +
+│                                         orchestrator/LSP + launcher (7) + snowball (3))
+├── tests/                            ← 21 ملفات · 269 اختباراً:
 │   │                                     kernel (36) · host (30) · agent-kernel (15) ·
 │   │                                     system (20) · logic (12) · architecture-enhancements (10) ·
 │   │                                     hermes (9) · intelligence (8) · stress (3) ·
 │   │                                     linux-arch-execution-layer (54) · project-scanner (6) ·
-│   │                                     editor-manager (17) · e2e-server (9) · e2e-blackbox (22) · nawat-cli (4)
+│   │                                     editor-manager (17) · e2e-server (9) · e2e-blackbox (22) ·
+│   │                                     nawat-cli (4) · desktop-scanner (4) ·
+│   │                                     desktop-entry-scanner-discovery (3) · launcher-discovery (1) ·
+│   │                                     mime-resolver (2) · program-catalog (1) ·
+│   │                                     launch-desktop-command (3، يلزم Firefox)
 ├── kernel.md                         ← ← هذا الملف: خريطة المشروع + سورس النواة
 ├── metadata.json                     ← تعريف النشر (AI Studio)
 ├── package.json · tsconfig*.json · vitest.config.ts · bun.lock
@@ -162,18 +175,20 @@ kernel-project/
 
 ## 6. الحالة الختامية (Checkpoint)
 
-- ✅ **255/255 اختباراً أخضر (15 ملفات)** · `tsc --noEmit` نظيف · `bun run build` نظيف.
+- ✅ **268/269 اختباراً أخضر (21 ملفات)** · `tsc --noEmit` نظيف · `bun run build` نظيف (الفاشل الوحيد: `launch-desktop-command` يتطلب Firefox مثبتاً — بيئي).
 - ✅ أربع طبقات مكتملة: نواة P (11 ملفاً بلا اعتماد خارجي) + مستضيف إقلاع بأنماط + نواة عليا AIOS + نظام VFS/محرك.
 - ✅ تنفيذ أرش حقيقي (`LinuxArchExecutionLayer`) + ماسح مشروع خارجي (`scanProject`) — يكتشف الملفات المخفية (نقطية/Unicode)، القابل للتنفيذ، setuid، هروب الروابط، المزروع/المعبث/المفقود مقابل الفهرس.
 - ✅ النواة تعمل بلا LLM مستمر (حلقة رمزية حتمية) + تعليم يغيّر سلوكها فعلياً عبر هيرمس.
 - ✅ موازنة الـ10ms حاضرة: `signalingLatencyMs` في المقاييس + `LRUCache` بمعامل TTL.
 - ✅ CLI (`bin/nawat.ts`) + خادم Express (`server.ts`) يعملان فوق النواة — **واجهة فاتحة Web OS Station معتمدة** + E2E آلي (mirror + blackbox + CLI).
 - ✅ **عقل موجّه (Orchestrator Kernel)**: اكتشاف الأدوات الناضجة المثبتة على النظام (VS Code · Neovim · Vim · Sublime · Emacs · Helix · OpenCode · gopls · tsserver · Falkon · Chrome · Bash-Term) والتفاعل معها كأطراف تنفيذية — `/api/editor/tools` · `/api/editor/open` · `/api/orchestrator/dispatch` · `/api/lsp/diagnostics` + تبويب واجهة تفاعلي + أوامر `host.*` — تحت `X-API-Key`، والـ`exec` يمر عبر بوابات طبقة الأرش (allowlist/جذر تنفيذ/قيود/حصص، بلا شل حر).
-- ⏳ المتبقي: اختبار Ollama حقيقي عند توفر نموذج · كرة الثلج · محرر واجهة كامل.
+- ✅ **نقل وحدات النسخة التجريبية (نقل فقط ثم معالجة أهمها)**: محرك **كرة الثلج المعرفي** (`snowball/`) + **مُطلِق برامج النظام** (`launcher/`: SystemAppLauncher/ProcessLauncher/WindowEmbedder/WebEmbedder/LauncherManager/DesktopEntryScanner/generateLauncherUI) + **اكتشاف البرامج** (`discovery/`: INIParser/DesktopEntryScanner/ProgramCatalog/MimeResolver) — مع الإبقاء على تحصيناتنا (لم يُنقل تراجع نسخة archive). ربط كامل: `host/index` + `src/index` + `runtime.snowball` + `bootloader` (subsystem + أمرا `host.snowball.metrics`/`record`) + `server.ts` (`/api/launcher/*` 7 مسارات + `/api/snowball/*` 3 مسارات).
+- ✅ **معالجة §7-1 (الأهم)**: مسارات snowball كانت تشير لـ`bootloader` غير معرَّف → `runtime?.snowball` · **`NawatRuntime` لم يكن يخزّن `snowball`** → أُضيف الحقل والإسناد · **مفاتيح تخزين كرة الثلج بـ`:` كانت تُرفض** (ESECURITY_VIOLATION من مُعقّم المسارات) → `/` — تحقق تشغيلي: `record` يخزّن ويستخرج نمطاً (file_opened→command_executed بثقة 0.99) · `metrics` تعكس العد · `predict` يستجيب.
+- ⏳ المتبقي: واجهة (Web UI) launcher/snowball لم تُنقل بعد · ربط `/api/launcher/*` بـallowlist (`xdg-open`/`xdg-mime`) + اكتشاف برامج فعلي · اختبار Ollama حقيقي عند توفر نموذج — تتبع المعالجة المؤجلة في **`PLAN.md` §7**.
 - ✅ ربط حقيقي للنواة العليا/هيرمس في المستضيف: `HermesKernel` (serve/learn) + نواة وكيل عبر `LLMCore`/`ToolRegistry`/`SessionManager` — بدل الأشباح السابقة (§5-أ في `PLAN.md`).
 - ✅ دمج إصلاحات الطرف الخارجي فوق تحصيناتنا: الوعود غير المعالجة (`donePromise.catch`+`isCanceled`) · `executeSyscall` حقيقي (طابور + أوامر + `syscall:executed`) · جسر Tool↔Command (`tool.*`) · جلسات↔حصص (`EQUOTA_EXCEEDED`) · VFS مدعوم بالتخزين الآمن · `/api/v1/chat/completions` + `/api/hermes/serve` + `/api/hermes/train` + حدث `arch:command_executed` — مع الإبقاء على الحماية (غ/ع/س) والتدقيق.
-- ⚠️ فجوات أمنية مسجّلة (تتبع في `PLAN.md` §5): عولج **غ** (مفتاح API + جذور فحص + تدقيق؛ أعدنا `127.0.0.1` الافتراضي بعدما أعادته نسخة archive `0.0.0.0`) و**ع** (رفض setuid/setgid) و**س** (عزل بجذر تنفيذ إلزامي) و**ن** (TOCTOU) و**ش** (فحص ELF عميق) و**ص/ف** (خط أساس دائم SHA-256) و**ل** (E2E آلي) و**ض** (قراءة موحّدة 512) و**د** (العقل الموجّه: exec عبر البوابات + allowlist محوّل بلا `bash` + إصلاح `bootloader.editor` غير المعرَّف) — المتبقي: طـ وو/م/ز/ح/ي/ك.
-- 📋 الحالة التفصيلية (ما تم · ما لم يُراجع · المتبقي · التحسينات) في **`PLAN.md`**.
+- ⚠️ فجوات أمنية مسجّلة (تتبع في `PLAN.md` §5): عولج **غ** (مفتاح API + جذور فحص + تدقيق؛ أعدنا `127.0.0.1` الافتراضي بعدما أعادته نسخة archive `0.0.0.0`) و**ع** (رفض setuid/setgid) و**س** (عزل بجذر تنفيذ إلزامي) و**ن** (TOCTOU) و**ش** (فحص ELF عميق) و**ص/ف** (خط أساس دائم SHA-256) و**ل** (E2E آلي) و**ض** (قراءة موحّدة 512) و**د** (العقل الموجّه: exec عبر البوابات + allowlist محوّل بلا `bash` + إصلاح `bootloader.editor` غير المعرَّف) — المتبقي: طـ وو/م/ز/ح/ي/ك + بند 1 من §7 (كرة الثلج ✓) وبند 2-7 (§7).
+- 📋 الحالة التفصيلية (ما تم · ما لم يُراجع · المتبقي · التحسينات · المعالجة المؤجلة) في **`PLAN.md`**.
 
 ---
 
