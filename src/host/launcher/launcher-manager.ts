@@ -152,10 +152,10 @@ export class LauncherManager {
 
     const normalized = path.normalize(filePath);
     const result = await this.executionLayer.execute({
-      commandLine: `xdg-open "${normalized}" &`
+      commandLine: `xdg-open ${normalized}`
     });
 
-    if (result.status === 'success') {
+    if (result.verdict === 'allowed' || result.status === 'success') {
       this.eventBus.emit('snowball:interaction' as any, {
         type: 'command_executed',
         source: 'launcher-manager',

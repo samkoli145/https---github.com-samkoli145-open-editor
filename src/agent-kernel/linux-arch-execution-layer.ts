@@ -96,7 +96,8 @@ export const DEFAULT_ALLOWED_BINARIES = [
   'node', 'npm', 'npx', 'bun', 'tsc', 'ts-node', 'python3', 'python', 'cargo', 'rustc', 'gcc', 'g++', 'clang', 'git', 'make', 'go',
   'systemctl', 'journalctl', 'systemd-analyze', 'ps', 'top', 'htop', 'kill',
   'pacman', 'curl', 'wget', 'tar', 'unzip', 'gzip', 'gunzip', 'xz', 'zstd', 'zip',
-  'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'chmod', 'ln', 'realpath', 'dirname', 'basename', 'diff'
+  'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'chmod', 'ln', 'realpath', 'dirname', 'basename', 'diff',
+  'xdg-open'
 ];
 
 const ARCH_SAFETY_RULES: ConstraintRule[] = [
