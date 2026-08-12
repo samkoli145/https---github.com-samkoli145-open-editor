@@ -10,8 +10,8 @@
  */
 
 import { execFile } from 'node:child_process';
-import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 import type { LocalizedString } from '../kernel/i18n/localized-string';
@@ -86,19 +86,28 @@ export interface LinuxArchRecord {
   status: LinuxArchStatus;
   verdict: 'allowed' | 'denied';
   reason?: string;
+  /** جذر التنفيذ الفعلي (execRoot أو cwd أو مجلد العمل) — كسجل تدقيق بنمط auditd */
+  effectiveRoot?: string;
   timestamp: number;
 }
 
 export const DEFAULT_ALLOWED_BINARIES = [
   'ls', 'pwd', 'echo', 'printf', 'cat', 'whoami', 'id', 'uname', 'arch', 'date', 'uptime',
-  'df', 'du', 'free', 'stat', 'file', 'which', 'env',
+  'df', 'du', 'free', 'stat', 'file', 'which', 'env', 'hostname', 'nproc',
   'grep', 'rg', 'ripgrep', 'find', 'tree', 'sed', 'awk', 'wc', 'head', 'tail', 'sort', 'uniq', 'cut', 'tr', 'yes',
+  'xargs', 'tee', 'paste', 'comm', 'seq', 'shuf', 'md5sum', 'sha256sum', 'bc', 'jq', 'readlink', 'mktemp', 'timeout',
   'node', 'npm', 'npx', 'bun', 'tsc', 'ts-node', 'python3', 'python', 'cargo', 'rustc', 'gcc', 'g++', 'clang', 'git', 'make', 'go',
   'systemctl', 'journalctl', 'systemd-analyze', 'ps', 'top', 'htop', 'kill',
   'pacman', 'curl', 'wget', 'tar', 'unzip', 'gzip', 'gunzip', 'xz', 'zstd', 'zip',
   'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'chmod', 'ln', 'realpath', 'dirname', 'basename', 'diff',
-  'xdg-open'
+  'xdg-open', 'ffmpeg', 'notify-send', 'wmctrl'
 ];
+
+/**
+ * أوامر مدمجة في الصدفة وليست ملفات ثنائية (cd/export/source...):
+ * تغيير الحالة (CWD/env/مصادر) يجب أن يُدار على مستوى الجلسة لا عبر تنفيذ أوامر.
+ */
+export const SHELL_BUILTINS = new Set(['cd', 'export', 'source', '.', 'alias', 'eval', 'exec']);
 
 const ARCH_SAFETY_RULES: ConstraintRule[] = [
   { id: 'arch_no_rm_force', expression: 'REGEX:^rm\\s+-[rR]+f', severity: 'block', reason: 'Deleting with force recursion is prohibited' },
@@ -109,7 +118,13 @@ const ARCH_SAFETY_RULES: ConstraintRule[] = [
   { id: 'arch_no_systemctl_power', expression: 'REGEX:^systemctl\\s+(poweroff|reboot|halt|suspend|hibernate)\\b', severity: 'block', reason: 'Power management via systemctl is prohibited' },
   { id: 'arch_no_pacman_remove', expression: 'REGEX:^pacman\\s+-R', severity: 'block', reason: 'Package removal via pacman is prohibited' },
   { id: 'arch_no_chown_root', expression: 'REGEX:^chown\\s+(root|0)\\b', severity: 'block', reason: 'Ownership escalation to root is prohibited' },
-  { id: 'arch_no_privilege', expression: 'REGEX:^(sudo|su|chroot)\\b', severity: 'block', reason: 'Privilege escalation or chroot is prohibited' }
+  { id: 'arch_no_privilege', expression: 'REGEX:^(sudo|su|chroot)\\b', severity: 'block', reason: 'Privilege escalation or chroot is prohibited' },
+  { id: 'arch_no_rm_parent_traversal', expression: 'REGEX:^rm\\s+.*\\.\\./', severity: 'block', reason: 'Parent directory traversal deletion is prohibited' },
+  { id: 'arch_no_rm_wildcard', expression: 'REGEX:^rm\\s+.*\\*', severity: 'block', reason: 'Wildcard deletion (rm *) is prohibited' },
+  { id: 'arch_no_rm_root', expression: 'REGEX:^rm\\s+.*(^|\\s)/(\\s|$)', severity: 'block', reason: 'Deleting the root directory (/) is prohibited' },
+  { id: 'arch_no_dd_raw', expression: 'REGEX:^dd\\s+.*\\bof=/dev/(sd|hd|vd|nvme|loop|mmcblk|mem|kmem)', severity: 'block', reason: 'Raw block device writes via dd are prohibited' },
+  { id: 'arch_no_curl_pipe_shell', expression: 'REGEX:curl.*\\|\\s*(ba)?sh', severity: 'block', reason: 'Piping curl output to shell is a security risk' },
+  { id: 'arch_no_wget_pipe_shell', expression: 'REGEX:wget.*\\|\\s*(ba)?sh', severity: 'block', reason: 'Piping wget output to shell is a security risk' }
 ];
 
 export class LinuxArchExecutionLayer {
@@ -169,6 +184,38 @@ export class LinuxArchExecutionLayer {
     return { toolName, subCommand, flags, targets };
   }
 
+  /**
+   * اكتشاف البرامج (بروح binfmt): يفحص مسارات بحث عن ثنائيات قابلة للتنفيذ
+   * (ELF أو سكربت بمفسر مسموح) دون تنفيذها. السكربتات التي تشير لمفسر غير
+   * مسموح تُستبعد، وأي مسار خارج جذر التنفيذ يُتجاهل.
+   */
+  public async discoverPrograms(searchPaths: string[]): Promise<string[]> {
+    const discovered: string[] = [];
+    for (const path of searchPaths) {
+      try {
+        const resolvedPath = realpathSync(path);
+        if (this.execRoot && !resolvedPath.startsWith(this.execRoot)) continue;
+
+        const entries = readdirSync(resolvedPath, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+          const fullPath = join(resolvedPath, entry.name);
+          const inspection = this.inspectPath(fullPath);
+          if (!inspection.exists || !inspection.executable) continue;
+          if (inspection.kind !== 'elf' && inspection.kind !== 'script') continue;
+          if (inspection.kind === 'script' && inspection.interpreter) {
+            const interpreterProgram = parseShebang(inspection.interpreter).program;
+            if (!this.allowedBinaries.includes(interpreterProgram)) continue;
+          }
+          discovered.push(entry.name);
+        }
+      } catch {
+        // تجاهل المسارات غير الموجودة أو غير المصرح بها
+      }
+    }
+    return [...new Set(discovered)];
+  }
+
   public setQuota(agentId: string, quota: ResourceQuota): void {
     this.quotaGuard.setQuota(agentId, quota);
   }
@@ -189,7 +236,14 @@ export class LinuxArchExecutionLayer {
       verdict: 'allowed' | 'denied' = 'denied'
     ): LinuxCommandResult => {
       const executionTimeMs = Date.now() - started;
-      this.records.push({ request, parsedTool: parsed, status, verdict, reason, timestamp: started });
+      const rootBase = this.execRoot ?? (request.cwd ? resolve(request.cwd) : process.cwd());
+      let effectiveRoot = rootBase;
+      try {
+        effectiveRoot = realpathSync(rootBase);
+      } catch {
+        effectiveRoot = resolve(rootBase);
+      }
+      this.records.push({ request, parsedTool: parsed, status, verdict, reason, effectiveRoot, timestamp: started });
       return this.buildResult(request, parsed, status, verdict, null, '', '', executionTimeMs, reason, warnings, agentId);
     };
 
@@ -199,6 +253,11 @@ export class LinuxArchExecutionLayer {
     if (constraintResult.isBlocked) {
       const rule = constraintResult.violatedRule;
       return denied('blocked', `DENIED by ${rule?.id}: ${rule?.reason}`);
+    }
+
+    // أوامر الصدفة المدمجة (cd/export/source/...): تغيير الحالة يُدار على مستوى الجلسة لا عبر تنفيذ أوامر
+    if (SHELL_BUILTINS.has(parsed.toolName)) {
+      return denied('blocked', `EPERM_SHELL_BUILTIN: '${parsed.toolName}' is a shell builtin; state changes must be managed at session level`);
     }
 
     const looksLikePath = parsed.toolName.includes('/') || parsed.toolName.startsWith('.');
@@ -361,10 +420,18 @@ export class LinuxArchExecutionLayer {
     const tokens = request.commandLine.trim().split(/\s+/);
     const args = tokens.slice(1);
 
+    // عزل البيئة (execve-style): ندمج بيئة الطلب فوق بيئة المضيف ثم نُزيل متغيرات
+    // التسريب الخطرة (LD_PRELOAD/LD_LIBRARY_PATH/NODE_OPTIONS) — لا بيئة نظيفة
+    // كاملة كي لا تُكسر حالات التشغيل الحقيقية (xdg-open يحتاج DISPLAY، git يحتاج HOME).
+    const safeEnv: NodeJS.ProcessEnv = { ...process.env, ...request.env };
+    delete safeEnv.LD_PRELOAD;
+    delete safeEnv.LD_LIBRARY_PATH;
+    delete safeEnv.NODE_OPTIONS;
+
     const outcome = await this.spawnCommand(execPath, args, {
       timeout: budgetMs,
       cwd,
-      env: { ...process.env, ...request.env }
+      env: safeEnv
     });
 
     const { stdout, stderr, exitCode, status, reason } = outcome;
@@ -377,7 +444,7 @@ export class LinuxArchExecutionLayer {
     }
 
     const executionTimeMs = Date.now() - started;
-    this.records.push({ request, parsedTool: parsed, status, verdict: 'allowed', reason, timestamp: started });
+    this.records.push({ request, parsedTool: parsed, status, verdict: 'allowed', reason, effectiveRoot, timestamp: started });
 
     return this.buildResult(request, parsed, status, 'allowed', exitCode, stdout, stderr, executionTimeMs, reason, warnings, agentId, budgetMs);
   }
