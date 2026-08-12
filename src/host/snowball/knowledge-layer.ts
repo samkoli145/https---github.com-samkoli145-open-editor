@@ -3,11 +3,28 @@ import { LRUCache } from '../../kernel/core/cache';
 import { SafeSystemStorageEngine } from '../../system/storage';
 import { KnowledgeEntry, KnowledgeTier, RecallQuery, InteractionContext } from './types';
 
+export const SOURCE_RELIABILITY_WEIGHTS: Record<string, number> = {
+  'user_interface': 1.0,
+  'user_preference': 1.0,
+  'system_command': 0.90,
+  'cli': 0.90,
+  'editor_manager': 0.90,
+  'local_llm': 0.75,
+  'hermes': 0.75,
+  'snowball:teach': 0.85,
+  'external_cloud': 0.50,
+  'external': 0.50
+};
+
+export const PROMOTION_THRESHOLD = 0.85;
+export const MAX_KNOWLEDGE_RECORDS = 2000;
+
 export class KnowledgeLayer {
   private cache: LRUCache<string, KnowledgeEntry>;
   private inMemoryMap: Map<string, KnowledgeEntry> = new Map();
   private storage: SafeSystemStorageEngine;
   private readonly storagePrefix = 'snowball/knowledge/';
+  public readonly maxRecords: number = MAX_KNOWLEDGE_RECORDS;
 
   constructor(
     storage?: SafeSystemStorageEngine,
@@ -22,6 +39,60 @@ export class KnowledgeLayer {
   }
 
   /**
+   * Calculates source reliability weight based on origin
+   */
+  public getSourceReliabilityWeight(source: string): number {
+    if (SOURCE_RELIABILITY_WEIGHTS[source] !== undefined) {
+      return SOURCE_RELIABILITY_WEIGHTS[source];
+    }
+    for (const [key, weight] of Object.entries(SOURCE_RELIABILITY_WEIGHTS)) {
+      if (source.includes(key)) return weight;
+    }
+    return 0.70;
+  }
+
+  /**
+   * Calculates LFU/LRU score with exponential decay factor:
+   * Score = Confidence * AccessCount * e^(-lambda * AgeMs)
+   * Half-life = 7 days (604,800,000 ms)
+   */
+  public calculateEntryScore(entry: KnowledgeEntry, now: number = Date.now()): number {
+    if (entry.tags?.includes('system_pinned') || entry.tags?.includes('pinned')) {
+      return Infinity; // Protected from eviction
+    }
+    const ageMs = Math.max(0, now - entry.lastAccessed);
+    const halfLifeMs = 7 * 24 * 3600 * 1000;
+    const lambda = Math.LN2 / halfLifeMs;
+    const decayFactor = Math.exp(-lambda * ageMs);
+    return entry.confidence * entry.accessCount * decayFactor;
+  }
+
+  /**
+   * Evicts lowest scoring entries if storage exceeds maxRecords
+   */
+  private async evictIfOverflow(): Promise<number> {
+    if (this.inMemoryMap.size < this.maxRecords) return 0;
+
+    const now = Date.now();
+    const entries = Array.from(this.inMemoryMap.values());
+    
+    entries.sort((a, b) => this.calculateEntryScore(a, now) - this.calculateEntryScore(b, now));
+
+    let evictedCount = 0;
+    const targetSize = Math.floor(this.maxRecords * 0.9);
+
+    for (const entry of entries) {
+      if (this.inMemoryMap.size <= targetSize) break;
+      if (this.calculateEntryScore(entry, now) === Infinity) continue;
+
+      await this.remove(entry.id);
+      evictedCount++;
+    }
+
+    return evictedCount;
+  }
+
+  /**
    * إضافة أو تحديث معرفة جديدة مع التخزين الدائم والكاش
    */
   async add(
@@ -29,16 +100,22 @@ export class KnowledgeLayer {
   ): Promise<Result<KnowledgeEntry, Error>> {
     const existing = await this.findByKey(entry.key, entry.tier);
 
+    const sourceWeight = this.getSourceReliabilityWeight(entry.source);
+    const effectiveConfidence = Math.min(1.0, entry.confidence * sourceWeight);
+
     if (existing.isOk) {
       return this.update(existing.value.id, {
         ...entry,
-        confidence: Math.max(existing.value.confidence, entry.confidence),
+        confidence: Math.max(existing.value.confidence, effectiveConfidence),
         accessCount: existing.value.accessCount + 1
       });
     }
 
+    await this.evictIfOverflow();
+
     const newEntry: KnowledgeEntry = {
       ...entry,
+      confidence: effectiveConfidence,
       id: this.generateId(),
       accessCount: 1,
       lastAccessed: Date.now(),

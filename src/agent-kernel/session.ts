@@ -2,6 +2,46 @@ import { Result, ok, err } from '../kernel/core/result';
 import { EventBus } from '../kernel/core/event-bus';
 import { ResourceQuotaGuard } from './quota';
 
+export interface SnowballContextOptions {
+  maxTokens?: number;     // e.g. 256-512 tokens (~1000-2000 chars)
+  minConfidence?: number; // e.g. 0.85
+  limit?: number;         // e.g. 5 entries
+}
+
+export interface SnowballKnowledgeItem {
+  key: string;
+  confidence: number;
+  tier: string;
+  data?: any;
+}
+
+/**
+ * Builds formatted System Context string for Snowball Knowledge Injection into ContextWindow/LLMCore
+ */
+export function buildSnowballContext(
+  knowledgeList: SnowballKnowledgeItem[],
+  options: SnowballContextOptions = {}
+): string {
+  const minConf = options.minConfidence ?? 0.85;
+  const limit = options.limit ?? 5;
+  const filtered = knowledgeList
+    .filter(k => k.confidence >= minConf)
+    .slice(0, limit);
+
+  if (filtered.length === 0) return '';
+
+  const lines = filtered.map(
+    k => `- Pattern (${k.confidence.toFixed(2)} confidence) [${k.tier}]: ${k.key}`
+  );
+  const contextText = `[SNOWBALL_MEMORY_CONTEXT]\n${lines.join('\n')}\n[/SNOWBALL_MEMORY_CONTEXT]`;
+
+  const maxChars = (options.maxTokens ?? 256) * 4;
+  if (contextText.length > maxChars) {
+    return contextText.substring(0, maxChars) + '\n[/SNOWBALL_MEMORY_CONTEXT]';
+  }
+  return contextText;
+}
+
 export type SessionState = 'idle' | 'busy' | 'interrupted' | 'closed';
 
 export interface SessionMessage {
@@ -52,6 +92,17 @@ export class SessionInstance {
     this.state = 'busy';
     this.emitStream('execute_request', content);
     return ok(undefined);
+  }
+
+  public injectSnowballContext(
+    knowledgeList: SnowballKnowledgeItem[],
+    options?: SnowballContextOptions
+  ): string {
+    const formatted = buildSnowballContext(knowledgeList, options);
+    if (formatted) {
+      this.metadata['snowballContext'] = formatted;
+    }
+    return formatted;
   }
 
   public touch(): void {

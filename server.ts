@@ -1795,7 +1795,7 @@ app.get('/', (_req, res) => {
         if (viewEl) viewEl.classList.add('hidden');
         const tabEl = document.getElementById('tab-' + t);
         if (tabEl) {
-          tabEl.className = 'px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100';
+          tabEl.className = 'p-2.5 rounded-lg border text-right transition flex flex-col items-center justify-center text-center gap-1 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100';
         }
       });
 
@@ -1862,32 +1862,6 @@ app.get('/', (_req, res) => {
         }
         if (powerBtnText) powerBtnText.innerText = 'Boot Kernel';
       }
-    }
-
-    function switchTab(tab) {
-      const allTabs = ['blueprint', 'dolphin', 'arch', 'commands', 'scan', 'extensions', 'events', 'scheduler', 'i18n', 'help'];
-      allTabs.forEach(t => {
-        const viewEl = document.getElementById('view-' + t);
-        if (viewEl) viewEl.classList.add('hidden');
-        const tabEl = document.getElementById('tab-' + t);
-        if (tabEl) {
-          tabEl.className = 'px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100';
-        }
-      });
-
-      const activeView = document.getElementById('view-' + tab);
-      if (activeView) activeView.classList.remove('hidden');
-      const activeTabBtn = document.getElementById('tab-' + tab);
-      if (activeTabBtn) {
-        if (tab === 'dolphin') {
-          activeTabBtn.className = 'px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-sky-50 border-sky-300 text-sky-800 font-bold shadow-xs';
-        } else {
-          activeTabBtn.className = 'px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 bg-emerald-50 border-emerald-300 text-emerald-800 font-bold shadow-xs';
-        }
-      }
-
-      currentTab = tab;
-      refreshData();
     }
 
     async function refreshData() {
