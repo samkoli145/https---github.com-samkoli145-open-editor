@@ -10,6 +10,7 @@ import { ResourceQuotaGuard, ResourceQuota, AgentResourceUsage } from './quota';
 import { SessionManager } from './session';
 import { SafeStorageEngine } from './storage';
 import { AgentScheduler, SyscallHandlers, SchedulerStats } from './scheduler';
+import { AgentSyscallPriority } from './syscalls';
 
 export type AgentCommandType = 'llm' | 'tool' | 'storage' | 'registry' | 'access' | 'quota' | 'session' | 'engine' | 'kernel';
 export type AgentManagedType = 'registry' | 'access' | 'quota' | 'session' | 'engine' | 'kernel';
@@ -31,7 +32,14 @@ export interface AgentKernelOptions {
   quota?: ResourceQuotaGuard;
   sessions?: SessionManager;
   storage?: SafeStorageEngine;
-  scheduler?: { mode?: 'fifo' | 'rr'; batchSize?: number };
+  scheduler?: {
+    mode?: 'fifo' | 'rr';
+    batchSize?: number;
+    priority?: AgentSyscallPriority;
+    maxQueueDepth?: number;
+    agingMs?: number;
+    maxConcurrentExec?: number;
+  };
   defaultAgentId?: string;
   defaultAgentName?: string;
 }
@@ -211,8 +219,9 @@ export class AgentKernel {
     }
 
     const query = this.buildQuery(spec, p);
+    const priority = (p.priority as AgentSyscallPriority | undefined) ?? undefined;
     this.registry.setState(agentName, 'busy');
-    const syscall = this.scheduler.submit(agentName, spec.type, query);
+    const syscall = this.scheduler.submit(agentName, spec.type, query, priority);
     const completed = await syscall.awaitDone();
     this.registry.setState(agentName, 'active');
     if (completed.isErr) {

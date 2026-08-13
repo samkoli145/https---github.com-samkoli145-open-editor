@@ -59,7 +59,7 @@ export class NawatRuntime {
   private lastSignalingLatencyMs: number = 0.8;
   public readonly disposables = new DisposableStore();
   public readonly pendingSyscalls = new Map<string, { reject: (reason: any) => void }>();
-  public readonly syscallQueue = new AgentSyscallQueue();
+  public readonly syscallQueue: AgentSyscallQueue;
 
   public agentKernel?: Record<string, any>;
   public hermes?: Record<string, any>;
@@ -71,13 +71,15 @@ export class NawatRuntime {
     public readonly profile: ProfileConfig,
     public readonly vfs: VirtualFileSystem,
     subsystems: SubsystemHandles = {},
-    initialState: RuntimeState = 'initialized'
+    initialState: RuntimeState = 'initialized',
+    options: { syscallQueueMaxDepth?: number } = {},
   ) {
     this.state = initialState;
     this.agentKernel = subsystems.agentKernel;
     this.hermes = subsystems.hermes;
     this.editor = subsystems.editor;
     this.snowball = subsystems.snowball;
+    this.syscallQueue = new AgentSyscallQueue({ maxDepth: options.syscallQueueMaxDepth ?? 64 });
   }
 
   public getContext(): KernelContext {
@@ -139,7 +141,9 @@ export class NawatRuntime {
       owner: 'runtime'
     });
 
-    this.syscallQueue.enqueue(syscall);
+    if (!this.syscallQueue.enqueue(syscall)) {
+      throw new Error('EBUSY: Runtime syscall queue is full (backpressure limit reached)');
+    }
 
     const p = new Promise<any>((resolve, reject) => {
       const handle = {

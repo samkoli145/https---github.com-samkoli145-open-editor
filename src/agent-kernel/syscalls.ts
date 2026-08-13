@@ -99,7 +99,21 @@ export class AgentSyscall {
     const end = this.completedAt || Date.now();
     return end - this.startedAt;
   }
+
+  public getTurnaroundMs(): number {
+    const end = this.completedAt || Date.now();
+    return Math.max(0, end - this.createdAt);
+  }
 }
+
+export interface AgentSyscallQueueOptions {
+  /** سقف عمق الطابور الكلي (ضغط الظهر): الإدراج يُرفض عند الامتلاء */
+  readonly maxDepth?: number;
+  /** عتبة التقدم بالعمر (ms): عنصر جاوزها يُخرج حتى لو كان بأولوية أدنى (منع التجويع) */
+  readonly agingMs?: number;
+}
+
+const PRIORITIES: AgentSyscallPriority[] = ['high', 'normal', 'low', 'background'];
 
 export class AgentSyscallQueue {
   private queues: Record<AgentSyscallPriority, AgentSyscall[]> = {
@@ -108,26 +122,53 @@ export class AgentSyscallQueue {
     low: [],
     background: []
   };
+  private readonly maxDepth: number;
+  private readonly agingMs: number;
 
-  public enqueue(syscall: AgentSyscall): void {
+  constructor(options: AgentSyscallQueueOptions = {}) {
+    this.maxDepth = options.maxDepth ?? Infinity;
+    this.agingMs = options.agingMs ?? 5_000;
+  }
+
+  /** إدراج بضغط الظهر: يعيد false عند بلوغ السقف (EBUSY) دون إدراج */
+  public enqueue(syscall: AgentSyscall): boolean {
+    if (this.getPendingCount() >= this.maxDepth) return false;
     this.queues[syscall.priority].push(syscall);
+    return true;
+  }
+
+  public isFull(): boolean {
+    return this.getPendingCount() >= this.maxDepth;
   }
 
   public dequeue(): AgentSyscall | undefined {
-    const priorities: AgentSyscallPriority[] = ['high', 'normal', 'low', 'background'];
-    for (const p of priorities) {
-      if (this.queues[p].length > 0) {
-        return this.queues[p].shift();
-      }
-    }
-    return undefined;
+    return this.pick(true);
   }
 
   public peek(): AgentSyscall | undefined {
-    const priorities: AgentSyscallPriority[] = ['high', 'normal', 'low', 'background'];
-    for (const p of priorities) {
+    return this.pick(false);
+  }
+
+  /** اختيار متقدم بالعمر أولاً (FCFS بين المتقدمين)، ثم الأولوية الصارمة */
+  private pick(remove: boolean): AgentSyscall | undefined {
+    const now = Date.now();
+    let oldestAged: AgentSyscall | undefined;
+    let oldestAgedLevel: AgentSyscallPriority | undefined;
+    for (const p of PRIORITIES) {
+      const front = this.queues[p][0];
+      if (front && now - front.createdAt >= this.agingMs) {
+        if (!oldestAged || front.createdAt < oldestAged.createdAt) {
+          oldestAged = front;
+          oldestAgedLevel = p;
+        }
+      }
+    }
+    if (oldestAged && oldestAgedLevel) {
+      return remove ? this.queues[oldestAgedLevel].shift() : oldestAged;
+    }
+    for (const p of PRIORITIES) {
       if (this.queues[p].length > 0) {
-        return this.queues[p][0];
+        return remove ? this.queues[p].shift() : this.queues[p][0];
       }
     }
     return undefined;
@@ -144,8 +185,7 @@ export class AgentSyscallQueue {
 
   public rejectPending(reason: Error = new Error('ECANCELED: Syscall canceled during queue purge')): number {
     let count = 0;
-    const priorities: AgentSyscallPriority[] = ['high', 'normal', 'low', 'background'];
-    for (const p of priorities) {
+    for (const p of PRIORITIES) {
       while (this.queues[p].length > 0) {
         const syscall = this.queues[p].shift();
         if (syscall) {
@@ -158,8 +198,7 @@ export class AgentSyscallQueue {
   }
 
   public clear(): void {
-    const priorities: AgentSyscallPriority[] = ['high', 'normal', 'low', 'background'];
-    for (const p of priorities) {
+    for (const p of PRIORITIES) {
       this.queues[p] = [];
     }
   }
