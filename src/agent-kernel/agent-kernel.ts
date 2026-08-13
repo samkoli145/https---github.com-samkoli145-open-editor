@@ -39,6 +39,8 @@ export interface AgentKernelOptions {
     maxQueueDepth?: number;
     agingMs?: number;
     maxConcurrentExec?: number;
+    workerCount?: number;
+    route?: 'affinity' | 'least-loaded';
   };
   defaultAgentId?: string;
   defaultAgentName?: string;
