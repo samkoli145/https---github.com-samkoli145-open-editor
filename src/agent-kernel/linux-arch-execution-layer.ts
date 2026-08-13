@@ -9,7 +9,7 @@
  * ثم تنفيذ حقيقي عبر child_process.execFile بدون shell.
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -27,6 +27,8 @@ export interface LinuxCommandRequest {
   env?: Record<string, string>;
   timeoutMs?: number;
   agentId?: string;
+  /** خفض أولوية CPU (niceness 0..19) عبر renice على العملية الحية */
+  niceLevel?: number;
 }
 
 export interface ParsedCommand {
@@ -49,6 +51,7 @@ export interface LinuxCommandResult {
   parsedTool: ParsedCommand;
   reason?: string;
   warnings: string[];
+  niceLevel?: number;
   quota?: { agentId: string; syscallCount: number; errorCount: number; budgetMs: number };
   summary: LocalizedString;
 }
@@ -67,6 +70,8 @@ export interface LinuxArchExecutionLayerOptions {
   enforceExecRoot?: boolean;
   rejectSetuidSetgid?: boolean;
   isolateAbsoluteTargets?: boolean;
+  /** خفض أولوية CPU الافتراضي لكل الأوامر (niceness 0..19) — يطبّق عبر renice */
+  niceLevel?: number;
 }
 
 /**
@@ -140,6 +145,7 @@ export class LinuxArchExecutionLayer {
   private readonly rejectSetuidSetgid: boolean;
   private readonly isolateAbsoluteTargets: boolean;
   private readonly forbiddenGeneralInterpreters: Set<string>;
+  private readonly niceLevel: number;
   private readonly records: LinuxArchRecord[] = [];
 
   constructor(options: LinuxArchExecutionLayerOptions = {}) {
@@ -157,6 +163,7 @@ export class LinuxArchExecutionLayer {
     this.enforceExecRoot = options.enforceExecRoot ?? true;
     this.rejectSetuidSetgid = options.rejectSetuidSetgid ?? true;
     this.isolateAbsoluteTargets = options.isolateAbsoluteTargets ?? true;
+    this.niceLevel = Math.min(19, Math.max(0, options.niceLevel ?? 0));
 
     for (const rule of [...CODE_DOMAIN_PROFILE.defaultConstraints, ...ARCH_SAFETY_RULES, ...(options.extraRules ?? [])]) {
       this.constraintEngine.addRule(rule);
@@ -435,10 +442,13 @@ export class LinuxArchExecutionLayer {
     delete safeEnv.LD_LIBRARY_PATH;
     delete safeEnv.NODE_OPTIONS;
 
+    const niceLevel = Math.min(19, Math.max(0, request.niceLevel ?? this.niceLevel));
+
     const outcome = await this.spawnCommand(execPath, args, {
       timeout: budgetMs,
       cwd,
-      env: safeEnv
+      env: safeEnv,
+      niceLevel
     });
 
     const { stdout, stderr, exitCode, status, reason } = outcome;
@@ -461,7 +471,7 @@ export class LinuxArchExecutionLayer {
     const executionTimeMs = Date.now() - started;
     this.records.push({ request, parsedTool: parsed, status, verdict: 'allowed', reason, effectiveRoot, timestamp: started });
 
-    return this.buildResult(request, parsed, status, 'allowed', exitCode, stdout, stderr, executionTimeMs, reason, warnings, agentId, budgetMs);
+    return this.buildResult(request, parsed, status, 'allowed', exitCode, stdout, stderr, executionTimeMs, reason, warnings, agentId, budgetMs, niceLevel);
     } finally {
       this.quotaGuard.releaseProcessSlot(agentId);
     }
@@ -478,7 +488,7 @@ export class LinuxArchExecutionLayer {
   private async spawnCommand(
     execPath: string,
     args: string[],
-    options: { timeout: number; cwd?: string; env: NodeJS.ProcessEnv }
+    options: { timeout: number; cwd?: string; env: NodeJS.ProcessEnv; niceLevel?: number }
   ): Promise<{ stdout: string; stderr: string; exitCode: number | null; status: LinuxArchStatus; reason?: string }> {
     let stdout = '';
     let stderr = '';
@@ -488,11 +498,15 @@ export class LinuxArchExecutionLayer {
 
     try {
       await new Promise<void>((resolvePromise) => {
-        execFile(execPath, args, options, (error, out, errOut) => {
+        const onExit = (
+          error: any,
+          out: string | Buffer,
+          errOut: string | Buffer
+        ) => {
           stdout = String(out);
           stderr = String(errOut);
           if (error) {
-            const code = (error as NodeJS.ErrnoException).code;
+            const code = (error as any).code;
             if (code === 'ETIMEDOUT' || (error as any).killed === true) {
               status = 'timeout';
               reason = `ETIMEDOUT: killed after ${options.timeout}ms (quota maxExecutionTimeMs)`;
@@ -511,7 +525,85 @@ export class LinuxArchExecutionLayer {
             exitCode = 0;
           }
           resolvePromise();
-        });
+        };
+
+        const nice = options.niceLevel ?? 0;
+        if (nice > 0) {
+          // niceness (خفض أولوية CPU) + kill زمني يقتل مجموعة العملية كلها (منع الأيتام)
+          const child = spawn(execPath, args, {
+            cwd: options.cwd,
+            env: options.env,
+            detached: true,
+            stdio: ['ignore', 'pipe', 'pipe']
+          });
+
+          let niced = false;
+          const childPid = child.pid;
+          try {
+            // خفض أولوية الجدولة عبر renice فوري بعد الإقلاع (0..19 → أولوية أدنى = أنسنة)
+            if (childPid !== undefined) {
+              execFile('renice', ['-n', String(nice), '-p', String(childPid)], (e) => {
+                if (!e) niced = true;
+              });
+            }
+          } catch {
+            /* renice يفتقر للصلاحية أو غير متوفر — نكمل دون خفض */
+          }
+
+          child.stdout?.on('data', (d: Buffer) => (stdout += d.toString()));
+          child.stderr?.on('data', (d: Buffer) => (stderr += d.toString()));
+
+          const timer = setTimeout(() => {
+            status = 'timeout';
+            reason = `ETIMEDOUT: killed after ${options.timeout}ms (quota maxExecutionTimeMs)`;
+            try {
+              // SIGKILL لمجموعة العملية (negative pid) فيقتل كل الأبناء — لا أيتام
+              if (childPid !== undefined) process.kill(-childPid, 'SIGKILL');
+            } catch {
+              try {
+                child.kill('SIGKILL');
+              } catch {
+                /* already exited */
+              }
+            }
+            resolvePromise();
+          }, options.timeout);
+
+          child.on('error', (err: NodeJS.ErrnoException) => {
+            clearTimeout(timer);
+            const code = err.code;
+            if (code === 'ENOENT') {
+              status = 'not_found';
+              reason = `ENOENT: binary '${execPath}' not found on host`;
+            } else {
+              status = 'error';
+              reason = code ? `${code}: ${err.message}` : err.message;
+            }
+            resolvePromise();
+          });
+
+          child.on('close', (code, signal) => {
+            if (status !== 'timeout') clearTimeout(timer);
+            if (status !== 'timeout') {
+              if (code !== null) {
+                exitCode = code;
+                if (code !== 0) {
+                  status = 'error';
+                  reason = `process exited with code ${code}`;
+                }
+              } else if (signal) {
+                status = 'error';
+                reason = `process killed by signal ${signal}`;
+              }
+            }
+            if (!niced && nice > 0) {
+              stderr += `\n[warn] renice failed; niceness requested (${nice}) not applied`;
+            }
+            resolvePromise();
+          });
+        } else {
+          execFile(execPath, args, options, onExit);
+        }
       });
     } catch (caught) {
       status = 'error';
@@ -600,7 +692,8 @@ export class LinuxArchExecutionLayer {
     reason: string | undefined,
     warnings: string[],
     agentId: string,
-    budgetMs?: number
+    budgetMs?: number,
+    niceLevel?: number
   ): LinuxCommandResult {
     const usage = this.quotaGuard.getUsage(agentId);
     const command = request.commandLine;
@@ -642,6 +735,7 @@ export class LinuxArchExecutionLayer {
       parsedTool: parsed,
       reason,
       warnings,
+      niceLevel,
       quota: {
         agentId,
         syscallCount: usage.syscallCount,

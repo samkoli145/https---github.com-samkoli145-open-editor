@@ -707,4 +707,61 @@ describe('Nawat LinuxArchExecutionLayer (Arch Linux Kernel Execution Layer)', ()
       expect(res.reason).toContain('exceeded maximum allowed memory budget');
     });
   });
+
+  // -------------------------------------------------------------------
+  // §5-ض: CPU Governance — niceness (renice) + time-based group kill
+  // -------------------------------------------------------------------
+  describe('§5-ض — CPU governance (niceness + time-based kill)', () => {
+    it('lowers CPU priority via renice when niceLevel is set', async () => {
+      const layer = new LinuxArchExecutionLayer({ execRoot: TMP, niceLevel: 19 });
+
+      const script = join(TMP, 'nice-check.py');
+      writeFileSync(
+        script,
+        '#!/usr/bin/env python3\nimport os, time\ntime.sleep(0.3)\nwith open(f"/proc/{os.getpid()}/stat") as f: print(f.read().split(" ")[18])\n',
+      );
+      chmodSync(script, 0o755);
+
+      const res = await layer.execute({ commandLine: './nice-check.py', cwd: TMP });
+      expect(res.status).toBe('success');
+      const niceValue = parseInt(res.stdout.trim(), 10);
+      expect(niceValue).toBe(19);
+      expect(res.niceLevel).toBe(19);
+    });
+
+    it('honours per-request niceLevel override over the layer default', async () => {
+      const layer = new LinuxArchExecutionLayer({ execRoot: TMP, niceLevel: 17 });
+
+      const script = join(TMP, 'nice-override.py');
+      writeFileSync(
+        script,
+        '#!/usr/bin/env python3\nimport os, time\ntime.sleep(0.3)\nwith open(f"/proc/{os.getpid()}/stat") as f: print(f.read().split(" ")[18])\n',
+      );
+      chmodSync(script, 0o755);
+
+      const res = await layer.execute({ commandLine: './nice-override.py', cwd: TMP, niceLevel: 19 });
+      expect(res.status).toBe('success');
+      const niceValue = parseInt(res.stdout.trim(), 10);
+      expect(niceValue).toBe(19);
+      expect(res.niceLevel).toBe(19);
+    });
+
+    it('time-based kill terminates the whole process group (no orphans) with niceLevel', async () => {
+      const layer = new LinuxArchExecutionLayer({ execRoot: TMP, niceLevel: 19 });
+
+      const res = await layer.execute({
+        commandLine: 'node -e setTimeout(()=>{},5000)',
+        cwd: TMP,
+        timeoutMs: 150,
+        niceLevel: 19,
+      });
+      expect(res.status).toBe('timeout');
+      expect(res.reason).toContain('ETIMEDOUT');
+
+      // لا أيتام: لا تبقى عملية node علقة من هذه المجموعة بعد SIGKILL الجماعي
+      const { spawnSync } = await import('node:child_process');
+      const probe = spawnSync('pgrep', ['-af', 'setTimeout\\(\\)=>\\{\\},5000'], { encoding: 'utf8' });
+      expect(probe.stdout.trim()).toBe('');
+    });
+  });
 });
