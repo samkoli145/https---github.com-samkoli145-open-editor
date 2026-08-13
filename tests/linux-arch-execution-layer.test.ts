@@ -578,6 +578,12 @@ describe('Nawat LinuxArchExecutionLayer (Arch Linux Kernel Execution Layer)', ()
       }
     });
 
+    it('includes process governance tools (pgrep/pkill) for supervising launched apps', () => {
+      for (const tool of ['pgrep', 'pkill']) {
+        expect(DEFAULT_ALLOWED_BINARIES).toContain(tool);
+      }
+    });
+
     it('blocks shell builtins (cd/export/source/alias) — state changes belong to the session', async () => {
       const layer = new LinuxArchExecutionLayer();
       for (const cmd of ['cd /tmp', 'export FOO=1', 'source ~/.bashrc', 'alias ll=ls']) {

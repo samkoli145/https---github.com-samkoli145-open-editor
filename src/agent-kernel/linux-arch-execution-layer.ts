@@ -102,7 +102,7 @@ export const DEFAULT_ALLOWED_BINARIES = [
   'grep', 'rg', 'ripgrep', 'find', 'tree', 'sed', 'awk', 'wc', 'head', 'tail', 'sort', 'uniq', 'cut', 'tr', 'yes',
   'xargs', 'tee', 'paste', 'comm', 'seq', 'shuf', 'md5sum', 'sha256sum', 'bc', 'jq', 'readlink', 'mktemp', 'timeout',
   'node', 'npm', 'npx', 'bun', 'tsc', 'ts-node', 'python3', 'python', 'cargo', 'rustc', 'gcc', 'g++', 'clang', 'git', 'make', 'go',
-  'systemctl', 'journalctl', 'systemd-analyze', 'ps', 'top', 'htop', 'kill',
+  'systemctl', 'journalctl', 'systemd-analyze', 'ps', 'top', 'htop', 'kill', 'pgrep', 'pkill',
   'pacman', 'curl', 'wget', 'tar', 'unzip', 'gzip', 'gunzip', 'xz', 'zstd', 'zip',
   'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'chmod', 'ln', 'realpath', 'dirname', 'basename', 'diff',
   'xdg-open', 'ffmpeg', 'notify-send', 'wmctrl',
