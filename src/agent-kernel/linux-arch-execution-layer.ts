@@ -105,7 +105,8 @@ export const DEFAULT_ALLOWED_BINARIES = [
   'systemctl', 'journalctl', 'systemd-analyze', 'ps', 'top', 'htop', 'kill',
   'pacman', 'curl', 'wget', 'tar', 'unzip', 'gzip', 'gunzip', 'xz', 'zstd', 'zip',
   'cp', 'mv', 'mkdir', 'rmdir', 'touch', 'chmod', 'ln', 'realpath', 'dirname', 'basename', 'diff',
-  'xdg-open', 'ffmpeg', 'notify-send', 'wmctrl'
+  'xdg-open', 'ffmpeg', 'notify-send', 'wmctrl',
+  'code', 'code-oss', 'code-insiders', 'code-server'
 ];
 
 /**

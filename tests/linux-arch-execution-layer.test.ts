@@ -572,6 +572,12 @@ describe('Nawat LinuxArchExecutionLayer (Arch Linux Kernel Execution Layer)', ()
       }
     });
 
+    it('includes VS Code editors in DEFAULT_ALLOWED_BINARIES (matches launcher/editor allowlists)', () => {
+      for (const tool of ['code', 'code-oss', 'code-insiders', 'code-server']) {
+        expect(DEFAULT_ALLOWED_BINARIES).toContain(tool);
+      }
+    });
+
     it('blocks shell builtins (cd/export/source/alias) — state changes belong to the session', async () => {
       const layer = new LinuxArchExecutionLayer();
       for (const cmd of ['cd /tmp', 'export FOO=1', 'source ~/.bashrc', 'alias ll=ls']) {
